@@ -80,4 +80,3 @@ npm install
 npm run dev
 ```
 Navigate to `http://localhost:3000` to monitor live automated load shifting across the Nairobi commercial network.
-`
