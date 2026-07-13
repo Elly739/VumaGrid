@@ -1,5 +1,7 @@
 # ⚡ VumaGrid (Distributed Energy Resource Management System)
 
+![CI Pipeline](https://github.com/Elly739/VumaGrid/actions/workflows/ci.yml/badge.svg)
+
 VumaGrid is an enterprise-grade, asset-light **Distributed Energy Resource Management System (DERMS)** built to optimize commercial and industrial clean energy infrastructure across East Africa. 
 
 Instead of deploying heavy physical hardware, VumaGrid acts as a pure software intelligence layer. It securely connects to heterogeneous industrial solar inverters, Battery Energy Storage Systems (BESS), and backup diesel arrays via native manufacturer APIs. By processing telemetry streams in real-time, the platform automates load-shifting, mitigates grid volatility, executes automated peak shaving, and tracks ESG compliance metrics.
