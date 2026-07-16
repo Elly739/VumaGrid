@@ -8,7 +8,7 @@ Instead of deploying heavy physical hardware, VumaGrid acts as a pure software i
 
 ---
 
-## 🚀 The Core Engineering Breakthroughs
+##  The Core Engineering Breakthroughs
 
 Most standard portfolio projects focus on simple CRUD architectures (e.g., e-commerce, blogs, social applications). VumaGrid is a deep industrial platform implementing complex backend infrastructure:
 
@@ -41,7 +41,7 @@ Most standard portfolio projects focus on simple CRUD architectures (e.g., e-com
 
 ---
 
-## 🛠️ Technology Stack & Dependencies
+##  Technology Stack & Dependencies
 
 ### Backend Ecosystem
 * **Python 3.13 / FastAPI:** High-performance asynchronous network routing router framework.
