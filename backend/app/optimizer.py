@@ -79,3 +79,64 @@ class EnergyOrchestrator:
                 "solar_utilized_kw": round(pulp.value(p_solar_used), 1),
             },
         }
+
+    @staticmethod
+    def simulate_investment_roi(historical_logs: list, current_bess_kwh: float, upgraded_bess_kwh: float, battery_cost_kes: float) -> dict:
+        """
+        Simulates a full 24-hour cycle using the upgraded battery parameters
+        to calculate absolute financial savings and payback metrics.
+        """
+        total_cost_current = 0.0
+        total_cost_upgraded = 0.0
+
+        for log in historical_logs:
+            solar = log["solar_generation_kw"]
+            load = log["facility_load_kw"]
+            tariff = log["current_tariff_kes"]
+            grid_online = log["grid_online"]
+
+            res_current = EnergyOrchestrator.optimize_dispatch(solar, load, 50.0, grid_online, tariff)
+            if res_current["status"] == "Optimal":
+                log_data = res_current["dispatch_log"]
+                total_cost_current += (log_data["grid_draw_kw"] * tariff) + (log_data["diesel_draw_kw"] * 45.0)
+
+            prob = pulp.LpProblem("Simulation_Step", pulp.LpMinimize)
+            p_grid = pulp.LpVariable("G", lowBound=0)
+            p_bat_dis = pulp.LpVariable("BD", lowBound=0)
+            p_bat_chg = pulp.LpVariable("BC", lowBound=0)
+            p_solar = pulp.LpVariable("S", lowBound=0)
+
+            prob += (p_grid * tariff) + (p_bat_dis * 0.50)
+            prob += p_solar + p_grid + p_bat_dis == load + p_bat_chg
+            prob += p_solar <= solar
+
+            if not grid_online:
+                prob += p_grid == 0
+
+            max_discharge_allowed = upgraded_bess_kwh * 0.4
+            prob += p_bat_dis <= max_discharge_allowed
+
+            if tariff <= 12.00:
+                prob += p_bat_chg <= (upgraded_bess_kwh * 0.2)
+            else:
+                prob += p_bat_chg <= max(0, solar - load)
+
+            prob.solve(pulp.PULP_CBC_CMD(msg=False))
+
+            if pulp.LpStatus[prob.status] == "Optimal":
+                total_cost_upgraded += (pulp.value(p_grid) * tariff)
+            else:
+                total_cost_upgraded += total_cost_current
+
+        daily_savings = max(0.0, total_cost_current - total_cost_upgraded)
+        annual_savings_kes = daily_savings * 365
+
+        payback_years = round(battery_cost_kes / annual_savings_kes, 1) if annual_savings_kes > 0 else 0.0
+        co2_saved_tons_annual = round((annual_savings_kes / tariff) * 0.38 / 1000, 2) if tariff > 0 else 0.0
+
+        return {
+            "annual_savings_kes": round(annual_savings_kes, 2),
+            "payback_period_years": payback_years if payback_years > 0 else "N/A",
+            "annual_co2_offset_tonnes": co2_saved_tons_annual,
+            "simulated_days": 1
+        }

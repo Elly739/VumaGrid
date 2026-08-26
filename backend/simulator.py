@@ -12,6 +12,9 @@ SITES = [
         "base_load_kw": 120,
         "solar_max_kw": 180,
         "bess_capacity_kwh": 300,
+        "current_soc_state": 75.0,
+        "tenant_id": "ORG-UPTOWN-HEALTHCARE",
+        "asset_type": "COMMERCIAL"
     },
     {
         "id": "VUMA-THK-IND",
@@ -20,14 +23,20 @@ SITES = [
         "base_load_kw": 250,
         "solar_max_kw": 400,
         "bess_capacity_kwh": 600,
+        "current_soc_state": 45.0,
+        "tenant_id": "ORG-THIKA-TEXTILES",
+        "asset_type": "COMMERCIAL"
     },
     {
-        "id": "VUMA-MSA-MALL",
-        "name": "Mombasa Retail Center",
+        "id": "VUMA-NKR-FARM",
+        "name": "Nakuru Irrigation Grid",
         "brand": "SUNGROW_POWER",
-        "base_load_kw": 85,
-        "solar_max_kw": 130,
-        "bess_capacity_kwh": 150,
+        "base_load_kw": 65,
+        "solar_max_kw": 110,
+        "bess_capacity_kwh": 120,
+        "current_soc_state": 55.0,
+        "tenant_id": "ORG-RIFT-AGRI",
+        "asset_type": "AGRICULTURAL"
     },
 ]
 
@@ -63,14 +72,27 @@ def generate_telemetry(site):
     # Artificially degrade battery health on Thika site to feed Fault Detection AI later
     soh = random.uniform(94.0, 99.0) if site["id"] != "VUMA-THK-IND" else random.uniform(76.0, 81.0)
 
-    # Format telemetry exactly as native manufacturer portals structured them
+    net_energy_balance = solar_gen - load
+
+    if grid_status == "OFFLINE":
+        charge_adjustment = (net_energy_balance / site["bess_capacity_kwh"]) * 100 * (5 / 3600)
+    else:
+        if tariff <= 12.00:
+            charge_adjustment = (50.0 / site["bess_capacity_kwh"]) * 100 * (5 / 3600)
+        else:
+            charge_adjustment = (net_energy_balance / site["bess_capacity_kwh"]) * 100 * (5 / 3600) if net_energy_balance < 0 else 0.1
+
+    site["current_soc_state"] = max(15.0, min(98.0, site["current_soc_state"] + charge_adjustment))
+
     if site["brand"] == "HUAWEI_SUN2000":
         return {
             "metadata": {"brand": "HUAWEI", "device_uid": site["id"], "timestamp": now.isoformat()},
             "registers": {
+                "tenant_id": site["tenant_id"],
+                "asset_type": site["asset_type"],
                 "active_power_output_kw": solar_gen,
                 "total_current_load_kw": load,
-                "bess_state_of_charge_pct": round(random.uniform(40, 90), 1),
+                "bess_state_of_charge_pct": round(site["current_soc_state"], 1),
                 "battery_health_soh": round(soh, 1),
                 "grid_voltage_status": 1 if grid_status == "ONLINE" else 0,
                 "active_tariff_kes": tariff,
@@ -80,25 +102,28 @@ def generate_telemetry(site):
     if site["brand"] == "VICTRON_ENERGY":
         return {
             "victron_venus_payload": {
+                "tenant_id": site["tenant_id"],
+                "asset_type": site["asset_type"],
                 "system_id": site["id"],
                 "epoch_time": int(now.timestamp()),
                 "pv_yield_kw": solar_gen,
                 "consumption_ac_load_kw": load,
-                "soc_percentage": round(random.uniform(30, 85), 1),
-                "battery_soh_pct": round(soh, 1),
+                "soc_percentage": round(site["current_soc_state"], 1),
+                "battery_health_pct": round(soh, 1),
                 "grid_state": "connected" if grid_status == "ONLINE" else "alarm_active",
                 "kplc_cost_per_kwh": tariff,
             }
         }
 
-    # SUNGROW_POWER
     return {
         "sungrow_data": {
+            "tenant_id": site["tenant_id"],
+            "asset_type": site["asset_type"],
             "station_code": site["id"],
             "sync_date": now.strftime("%Y-%m-%d %H:%M:%S"),
             "array_power_kw": solar_gen,
             "load_power_kw": load,
-            "bess_cap_left_pct": round(random.uniform(45, 95), 1),
+            "bess_cap_left_pct": round(site["current_soc_state"], 1),
             "state_of_health": round(soh, 1),
             "grid_relay_closed": True if grid_status == "ONLINE" else False,
             "billing_rate_kes": tariff,
@@ -109,14 +134,14 @@ def generate_telemetry(site):
 async def execution_loop():
     import httpx
 
-    print("⚡ VumaGrid Live Net-Routing Inverter Simulator Enabled.")
+    print("VumaGrid Live Net-Routing Inverter Simulator Enabled.")
 
     async with httpx.AsyncClient() as client:
         while True:
             print(f"\n--- Emulated Network Push: {datetime.now().strftime('%H:%M:%S')} ---")
             for site in SITES:
                 payload = generate_telemetry(site)
-                print(f"📦 [EMULATED RAW STREAM] {site['brand']} -> Created for {site['id']}")
+                print(f"[EMULATED RAW STREAM] {site['brand']} -> Created for {site['id']}")
 
                 if site["brand"] == "HUAWEI_SUN2000":
                     url = "http://127.0.0.1:8013/api/v1/telemetry/huawei"
@@ -127,9 +152,9 @@ async def execution_loop():
 
                 try:
                     response = await client.post(url, json=payload)
-                    print(f"📡 [PUSH SUCCESS] {site['id']} -> Status Code: {response.status_code}")
+                    print(f"[PUSH SUCCESS] {site['id']} -> Status Code: {response.status_code}")
                 except Exception as e:
-                    print(f"❌ [NETWORK ROUTE FAILURE] Could not reach server core for {site['id']}: {str(e)}")
+                    print(f"[NETWORK ROUTE FAILURE] Could not reach server core for {site['id']}: {str(e)}")
 
             await asyncio.sleep(5)
 
@@ -138,4 +163,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(execution_loop())
     except KeyboardInterrupt:
-        print("\n🛑 Simulator stopped gracefully.")
+        print("\nSimulator stopped gracefully.")
