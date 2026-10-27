@@ -1,21 +1,21 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UnifiedTelemetry(BaseModel):
     """Production Multi-Tenant unified layout mapping isolated customer bounds."""
-    tenant_id: str
-    site_id: str
-    asset_type: str
-    brand: str
+    tenant_id: str = Field(min_length=1, max_length=128)
+    site_id: str = Field(min_length=1, max_length=128)
+    asset_type: str = Field(min_length=1, max_length=64)
+    brand: str = Field(min_length=1, max_length=64)
     timestamp: datetime
-    solar_generation_kw: float
-    facility_load_kw: float
-    battery_soc_pct: float
-    battery_soh_pct: float
+    solar_generation_kw: float = Field(ge=0)
+    facility_load_kw: float = Field(ge=0)
+    battery_soc_pct: float = Field(ge=0, le=100)
+    battery_soh_pct: float = Field(ge=0, le=100)
     grid_online: bool
-    current_tariff_kes: float
+    current_tariff_kes: float = Field(ge=0)
 
     def calculate_health_penalty(self) -> float:
         penalty = 0.0

@@ -1,7 +1,8 @@
 import asyncio
 import json
+import os
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # 1. Profile Definitions for Real Commercial Facilities in Kenya
 SITES = [
@@ -39,6 +40,9 @@ SITES = [
         "asset_type": "AGRICULTURAL"
     },
 ]
+API_ORIGIN = os.getenv("VUMAGRID_API_URL", "http://127.0.0.1:8013").rstrip("/")
+INGESTION_TOKENS = json.loads(os.getenv("VUMAGRID_INGESTION_TOKENS", "{}") or "{}")
+NAIROBI_TIMEZONE = timezone(timedelta(hours=3), name="EAT")
 
 
 def get_kplc_tariff(hour):
@@ -53,7 +57,7 @@ def get_kplc_tariff(hour):
 
 def generate_telemetry(site):
     """Generates authentic manufacturer-specific register logs."""
-    now = datetime.now()
+    now = datetime.now(NAIROBI_TIMEZONE)
     hour = now.hour
 
     # Generate solar bell curve peaking between 11:00 AM and 2:00 PM
@@ -144,14 +148,18 @@ async def execution_loop():
                 print(f"[EMULATED RAW STREAM] {site['brand']} -> Created for {site['id']}")
 
                 if site["brand"] == "HUAWEI_SUN2000":
-                    url = "http://127.0.0.1:8013/api/v1/telemetry/huawei"
+                    url = f"{API_ORIGIN}/api/v1/telemetry/huawei"
                 elif site["brand"] == "VICTRON_ENERGY":
-                    url = "http://127.0.0.1:8013/api/v1/telemetry/victron"
+                    url = f"{API_ORIGIN}/api/v1/telemetry/victron"
                 else:
-                    url = "http://127.0.0.1:8013/api/v1/telemetry/sungrow"
+                    url = f"{API_ORIGIN}/api/v1/telemetry/sungrow"
 
                 try:
-                    response = await client.post(url, json=payload)
+                    tenant_id = site["tenant_id"]
+                    device_token = next((token for token, scope in INGESTION_TOKENS.items()
+                                         if tenant_id in ([scope] if isinstance(scope, str) else scope)), None)
+                    headers = {"Authorization": f"Bearer {device_token}"} if device_token else {}
+                    response = await client.post(url, json=payload, headers=headers)
                     print(f"[PUSH SUCCESS] {site['id']} -> Status Code: {response.status_code}")
                 except Exception as e:
                     print(f"[NETWORK ROUTE FAILURE] Could not reach server core for {site['id']}: {str(e)}")

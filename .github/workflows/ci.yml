@@ -30,7 +30,7 @@ jobs:
     - name: Verify Code Compilation Integrity
       run: |
         cd backend
-        python -m py_compile app/main.py app/models.py app/optimizer.py simulator.py
+        python -m py_compile app/main.py app/models.py app/optimizer.py app/storage.py simulator.py
 
   frontend-build:
     name: Frontend Compilation & Build Check

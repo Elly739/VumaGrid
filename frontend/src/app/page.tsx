@@ -1,462 +1,166 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { Activity, Battery, Sun, Zap, ShieldAlert, Leaf, Coins, CheckCircle } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Activity, AlertTriangle, Battery, CheckCircle2, ChevronRight, CircleHelp, Clock3, Leaf, MapPin, RefreshCw, Search, Sun, Zap } from "lucide-react";
+import { apiRequest, apiUrl, setAccessToken } from "@/lib/api";
 
-interface SiteTelemetry {
-  site_id: string;
-  site_name?: string;
-  brand: string;
-  solar_generation_kw: number;
-  facility_load_kw: number;
-  battery_soc_pct: number;
-  battery_soh_pct: number;
-  grid_online: boolean;
-  current_tariff_kes: number;
-  energy_health_score: number;
-  optimization: {
-    primary_command: string;
-    dispatch_log: {
-      grid_draw_kw: number;
-      battery_discharge_kw: number;
-      battery_charge_kw: number;
-      diesel_draw_kw: number;
-      solar_utilized_kw: number;
-    };
-  };
-  fault_alerts: Array<{ severity: string; type: string; message: string }>;
-  carbon_intelligence: {
-    co2_saved_kg_current: number;
-    cumulative_co2_saved_metric_tons: number;
-    total_clean_energy_generated_mwh: number;
-    diesel_generators_displaced_liters: number;
-  };
+type Alert = { severity: string; type: string; message: string };
+type Site = {
+  tenant_id: string; site_id: string; site_name?: string; data_source?: string; brand: string;
+  timestamp?: string; solar_generation_kw: number; facility_load_kw: number; battery_soc_pct: number;
+  battery_soh_pct: number; grid_online: boolean; current_tariff_kes: number; energy_health_score: number;
+  optimization?: { primary_command: string; dispatch_log?: { grid_draw_kw: number; battery_discharge_kw: number } };
+  fault_alerts?: Alert[];
+};
+type Sample = { timestamp: string; solar_generation_kw: number; facility_load_kw: number };
+
+function age(value?: string) {
+  if (!value) return "No timestamp";
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
+  return minutes < 1 ? "Just now" : minutes + " min ago";
 }
+function number(value: number) { return new Intl.NumberFormat("en-KE", { maximumFractionDigits: 0 }).format(value || 0); }
 
-export default function EnergyControlRoom() {
-  const [sites, setSites] = useState<SiteTelemetry[]>([]);
+export default function OperationsDashboard() {
+  const [sites, setSites] = useState<Site[]>([]);
+  const [samples, setSamples] = useState<Sample[]>([]);
+  const [selected, setSelected] = useState("");
+  const [search, setSearch] = useState("");
+  const [tenant, setTenant] = useState("");
+  const [tenants, setTenants] = useState<Array<{tenant_id:string;site_count:number}>>([]);
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [updated, setUpdated] = useState<Date | null>(null);
+  const [accessToken, setAccessTokenInput] = useState("");
+  const [hasAccessToken, setHasAccessToken] = useState(false);
 
-  const [filterTenant, setFilterTenant] = useState<string>('');
-  const [filterAssetType, setFilterAssetType] = useState<string>('');
-
-  const [selectedSite, setSelectedSite] = useState('VUMA-THK-IND');
-  const [upgradeKwh, setUpgradeKwh] = useState(1000);
-  const [costKes, setCostKes] = useState(3500000);
-  const [simResult, setSimResult] = useState<{annual_savings_kes: number; payback_period_years: number | string; annual_co2_offset_tonnes: number} | null>(null);
-  const [simulating, setSimulating] = useState(false);
-
-  const [newOrgName, setNewOrgName] = useState('Kericho Tea Estate');
-  const [newAssetType, setNewAssetType] = useState('AGRICULTURAL');
-  const [newBrand, setNewBrand] = useState('VICTRON_ENERGY');
-  const [isOnboarding, setIsOnboarding] = useState(false);
-  const [onboardedMessage, setOnboardedMessage] = useState<string | null>(null);
-  const [onboardedTenants, setOnboardedTenants] = useState<{id: string; name: string}[]>([]);
-
-  const handleOnboardNewAsset = async () => {
-    setIsOnboarding(true);
-    setOnboardedMessage(null);
-
-    const generatedTenantId = 'ORG-' + newOrgName.toUpperCase().replace(/\s+/g, '-');
-    const generatedSiteId = 'VUMA-' + newOrgName.substring(0, 3).toUpperCase() + '-NODE';
-
+  const refresh = useCallback(async () => {
     try {
-      let url: string;
-      let payload: Record<string, unknown>;
-
-      if (newBrand === 'HUAWEI_SUN2000') {
-        url = 'http://127.0.0.1:8013/api/v1/telemetry/huawei';
-        payload = {
-          "metadata": {
-            "brand": "HUAWEI",
-            "device_uid": generatedSiteId,
-            "timestamp": new Date().toISOString(),
-            "tenant_id": generatedTenantId,
-            "asset_type": newAssetType
-          },
-          "registers": {
-            "tenant_id": generatedTenantId,
-            "asset_type": newAssetType,
-            "active_power_output_kw": 25.0,
-            "total_current_load_kw": 20.1,
-            "bess_state_of_charge_pct": 70.0,
-            "battery_health_soh": 99.0,
-            "grid_voltage_status": 1,
-            "active_tariff_kes": 19.80
-          }
-        };
-      } else {
-        url = 'http://127.0.0.1:8013/api/v1/telemetry/victron';
-        payload = {
-          "victron_venus_payload": {
-            "tenant_id": generatedTenantId,
-            "asset_type": newAssetType,
-            "system_id": generatedSiteId,
-            "epoch_time": Math.floor(Date.now() / 1000),
-            "pv_yield_kw": 45.0,
-            "consumption_ac_load_kw": 38.5,
-            "soc_percentage": 80.0,
-            "battery_health_pct": 98.5,
-            "grid_state": "connected",
-            "kplc_cost_per_kwh": 19.80
-          }
-        };
-      }
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        setOnboardedMessage(`Device Successfully Activated! Webhook configuration synced. Generated Tenant ID: ${generatedTenantId}.`);
-        setOnboardedTenants(prev => [...prev, { id: generatedTenantId, name: newOrgName }]);
-      }
-    } catch (err) {
-      console.error("Device activation pipeline crash:", err);
-    } finally {
-      setIsOnboarding(false);
-    }
-  };
-
-  const executeInvestmentSimulation = async () => {
-    setSimulating(true);
-    try {
-      const res = await fetch('http://127.0.0.1:8013/api/v1/analytics/simulate-investment', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          site_id: selectedSite,
-          upgraded_capacity_kwh: Number(upgradeKwh),
-          estimated_cost_kes: Number(costKes)
-        })
-      });
-      const metrics = await res.json();
-      setSimResult(metrics);
-    } catch (err) {
-      console.error('Simulation pipeline runtime exception:', err);
-    } finally {
-      setSimulating(false);
-    }
-  };
+      const query = tenant ? "?tenant_id=" + encodeURIComponent(tenant) : "";
+      const data = await apiRequest<Site[]>("/api/v1/dashboard/state" + query);
+      setSites(data);
+      setError("");
+      setUpdated(new Date());
+      setSelected((current) => data.some((site) => site.site_id === current) ? current : (data[0]?.site_id || ""));
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not load site data."); }
+    finally { setLoading(false); }
+  }, [tenant]);
 
   useEffect(() => {
-    async function fetchGridState() {
-      try {
-        let url = 'http://127.0.0.1:8013/api/v1/dashboard/state?';
-        if (filterTenant) url += `tenant_id=${filterTenant}&`;
-        if (filterAssetType) url += `asset_type=${filterAssetType}`;
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("Data pipeline connection failed");
-        const data = await response.json();
-        setSites(data);
-        setError(null);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Connecting to central VumaGrid engine...");
-      } finally {
-        setLoading(false);
-      }
-    }
+    setHasAccessToken(Boolean(window.sessionStorage.getItem("vumagrid-access-token")));
+    refresh();
+    apiRequest<Array<{tenant_id:string;site_count:number}>>("/api/v1/tenants").then(setTenants).catch(() => undefined);
+    const timer = window.setInterval(refresh, 10000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
 
-    fetchGridState();
-    const interval = window.setInterval(fetchGridState, 3000);
-    return () => window.clearInterval(interval);
-  }, [filterTenant, filterAssetType]);
+  const connectWithToken = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAccessToken(accessToken.trim());
+    setHasAccessToken(Boolean(accessToken.trim()));
+    setError("");
+    refresh();
+  };
 
-  if (loading) {
-    return <div className="p-8 text-center text-gray-400">Booting VumaGrid Control Terminal...</div>;
-  }
+  const disconnect = () => {
+    setAccessToken("");
+    setHasAccessToken(false);
+    setError("A valid bearer access token is required.");
+  };
 
-  return (
-    <main className="min-h-screen bg-[#0B0F19] p-6 text-gray-100">
-      <header className="mb-6 flex flex-col gap-4 border-b border-gray-800 pb-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-wider text-emerald-400">
-            <Activity className="animate-pulse" /> VUMAGRID // NATIONAL DERMS CORE
-          </h1>
-          <p className="mt-1 font-mono text-xs text-gray-400">Nairobi, Kenya Area Dispatch Optimization Hub</p>
-        </div>
+  const active = sites.find((site) => site.site_id === selected) || sites[0];
+  useEffect(() => {
+    if (!active) { setSamples([]); return; }
+    let alive = true;
+    const query = "?tenant_id=" + encodeURIComponent(active.tenant_id) + "&hours=24";
+    apiRequest<Sample[]>("/api/v1/sites/" + encodeURIComponent(active.site_id) + "/history" + query)
+      .then((rows) => { if (alive) setSamples(rows); })
+      .catch(() => { if (alive) setSamples([]); });
+    return () => { alive = false; };
+  }, [active?.site_id, active?.tenant_id]);
 
-         <div className="flex flex-wrap items-center gap-3">
-          <a
-            href={`http://127.0.0.1:8013/api/v1/analytics/export-esg-report${filterTenant ? `?tenant_id=${filterTenant}` : ''}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="bg-emerald-600 hover:bg-emerald-700 text-white font-mono text-xs px-3 py-1.5 rounded transition flex items-center gap-2 border border-emerald-500 font-bold"
-          >
-            <Leaf className="w-3.5 h-3.5" /> EXPORT ESG AUDIT REPORT (PDF)
-          </a>
+  const visible = useMemo(() => sites.filter((site) => (site.site_name || site.site_id).toLowerCase().includes(search.toLowerCase())), [sites, search]);
+  const alerts = sites.flatMap((site) => (site.fault_alerts || []).map((alert) => ({...alert, site})));
+  const critical = alerts.filter((item) => item.severity.toUpperCase() === "CRITICAL").length;
+  const needsAttention = sites.filter((site) => !site.grid_online || site.battery_soc_pct < 25 || (site.fault_alerts?.length || 0) > 0).length;
+  const totalSolar = sites.reduce((sum, site) => sum + (site.solar_generation_kw || 0), 0);
+  const totalLoad = sites.reduce((sum, site) => sum + (site.facility_load_kw || 0), 0);
+  const maxPower = Math.max(1, ...samples.flatMap((sample) => [sample.solar_generation_kw, sample.facility_load_kw]));
+  const chartPoints = (key: "solar_generation_kw" | "facility_load_kw") => samples.map((row, i) => {
+    const x = samples.length < 2 ? 0 : i * 600 / (samples.length - 1);
+    const y = 146 - ((row[key] || 0) / maxPower) * 120;
+    return (i ? "L" : "M") + x + " " + y;
+  }).join(" ");
 
-          {error ? (
-            <div className="rounded border border-red-900 bg-red-950/40 px-3 py-1.5 text-xs font-mono text-red-400">
-              ⚠️ LINK DOWN: {error}
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 rounded border border-emerald-900 bg-emerald-950/40 px-3 py-1.5 text-xs font-mono text-emerald-400">
-              <div className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
-              SYNCHRONIZED METRICS ENGAGED // PIPELINE OK
-            </div>
-          )}
-         </div>
+  return <main className="ops-shell">
+    <aside className="ops-sidebar">
+      <a className="ops-brand" href="#"><span className="brand-mark"><Activity size={19}/></span><span>vuma<span className="brand-light">grid</span><small>ENERGY OPERATIONS</small></span></a>
+      <div className="nav-label">WORKSPACE</div>
+      <a className="nav-item active"><Activity size={17}/>Overview</a>
+      <a className="nav-item" href="#sites"><MapPin size={17}/>Sites <span className="nav-count">{sites.length}</span></a>
+      <a className="nav-item" href="#alerts"><AlertTriangle size={17}/>Alerts {alerts.length > 0 && <span className="nav-count alert-count">{alerts.length}</span>}</a>
+      <div className="nav-label nav-spaced">TOOLS</div>
+      <a className="nav-item" href="#performance"><Zap size={17}/>Performance</a>
+      <a className="nav-item" href={apiUrl("/api/v1/analytics/export-esg-report" + (tenant ? "?tenant_id=" + encodeURIComponent(tenant) : ""))}><Leaf size={17}/>ESG report</a>
+      <div className="sidebar-bottom"><div className="operator"><span className="operator-avatar">OP</span><span>Operations team<small>Control room</small></span><CircleHelp size={16}/></div><div className="sidebar-note">Vuma Grid DERMS <span>v1.1</span></div></div>
+    </aside>
+
+    <section className="ops-main">
+      <header className="ops-topbar">
+        <div className="mobile-brand">Vuma<span>Grid</span></div>
+        <div className="breadcrumbs">Operations <ChevronRight size={14}/> <b>Portfolio overview</b></div>
+        <div className="top-actions"><span className="live-indicator"><i/>Live monitoring</span><span className="updated-label"><Clock3 size={14}/>{updated ? "Updated " + updated.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : "Connecting…"}</span>{hasAccessToken && <button className="text-button" onClick={disconnect}>Sign out</button>}<button className="icon-button" aria-label="Refresh data" onClick={refresh}><RefreshCw size={16}/></button></div>
       </header>
 
-      <section className="mb-6 bg-[#121826] border border-gray-800 rounded-xl p-4 flex flex-col sm:flex-row gap-4 justify-between items-center font-mono text-xs">
-        <div className="text-gray-400">
-          ACTIVE INTERFACE SCOPE: <span className="text-emerald-400 font-bold">{filterTenant || filterAssetType ? 'ISOLATED TENANT MATRIX' : 'GLOBAL SHOWCASE NETWORK'}</span>
+      <div className="page-content">
+        <div className="page-heading"><div><div className="eyebrow">NATIONAL OPERATIONS</div><h1>Portfolio overview</h1><p>Live health and operating conditions across your distributed energy sites.</p></div>
+          <label className="tenant-select"><span>Portfolio</span><select value={tenant} onChange={(event) => setTenant(event.target.value)}><option value="">All portfolios</option>{tenants.map((item) => <option key={item.tenant_id} value={item.tenant_id}>{item.tenant_id} · {item.site_count}</option>)}</select></label>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div>
-            <select value={filterAssetType} onChange={(e) => setFilterAssetType(e.target.value)} className="bg-[#1C2333] border border-gray-700 rounded px-2.5 py-1.5 text-white">
-              <option value="">ALL ASSET CLASSES (SHOWCASE)</option>
-              <option value="COMMERCIAL">COMMERCIAL FACILITIES</option>
-              <option value="AGRICULTURAL">AGRICULTURAL FARMS</option>
-              <option value="RESIDENTIAL">RESIDENTIAL PROPERTIES</option>
-            </select>
-          </div>
-          <div>
-            <select value={filterTenant} onChange={(e) => setFilterTenant(e.target.value)} className="bg-[#1C2333] border border-gray-700 rounded px-2.5 py-1.5 text-white">
-              <option value="">ALL CORPORATE TENANTS</option>
-              <option value="ORG-UPTOWN-HEALTHCARE">Uptown Healthcare Group</option>
-              <option value="ORG-THIKA-TEXTILES">Thika Textile Holdings</option>
-              <option value="ORG-RIFT-AGRI">Rift Valley Agriculture</option>
-              {onboardedTenants.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          </div>
+
+        {error && <div className="connection-alert"><AlertTriangle size={17}/><span><b>Connection issue</b>{error}</span><button onClick={refresh}>Retry</button></div>}
+        {error.toLowerCase().includes("bearer access token") && <form className="access-card" onSubmit={connectWithToken}><div><b>Sign in to your site portfolio</b><p>Enter the access token provided by your Vuma Grid administrator. Your token stays in this browser tab.</p></div><input type="password" autoComplete="off" value={accessToken} onChange={(event) => setAccessTokenInput(event.target.value)} placeholder="Bearer access token" aria-label="Bearer access token"/><button type="submit" disabled={!accessToken.trim()}>Connect</button></form>}
+        <section className="metric-grid" aria-label="Portfolio summary">
+          <article className={"metric-card " + (needsAttention ? "metric-warn" : "")}><div className="metric-top"><span>Sites needing attention</span><span className="metric-icon amber"><AlertTriangle size={17}/></span></div><div className="metric-value">{needsAttention}<small> / {sites.length}</small></div><div className="metric-foot">{critical ? <b className="text-red">{critical} critical alert{critical === 1 ? "" : "s"}</b> : "No critical alerts"}<span>· portfolio health</span></div></article>
+          <article className="metric-card"><div className="metric-top"><span>Active alerts</span><span className="metric-icon red"><Zap size={17}/></span></div><div className="metric-value">{alerts.length}</div><div className="metric-foot">Across monitored sites</div></article>
+          <article className="metric-card"><div className="metric-top"><span>Solar generation</span><span className="metric-icon green"><Sun size={17}/></span></div><div className="metric-value">{number(totalSolar)}<small> kW</small></div><div className="metric-foot">Current portfolio output</div></article>
+          <article className="metric-card"><div className="metric-top"><span>Facility demand</span><span className="metric-icon blue"><Zap size={17}/></span></div><div className="metric-value">{number(totalLoad)}<small> kW</small></div><div className="metric-foot">Current portfolio load</div></article>
+        </section>
+
+        <div className="content-grid">
+          <section className="panel site-panel" id="sites">
+            <div className="panel-heading"><div><h2>Site health</h2><p>Current operating state for each connected site</p></div><span className="count-pill">{visible.length} sites</span></div>
+            <div className="site-toolbar"><label className="search-box"><Search size={16}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search sites"/></label><span className="updated-label"><i className="tiny-live"/> Auto refresh 10s</span></div>
+            <div className="table-scroll"><table><thead><tr><th>SITE</th><th>STATUS</th><th>SOLAR / LOAD</th><th>BATTERY</th><th>HEALTH</th><th>LAST UPDATE</th></tr></thead>
+              <tbody>{visible.map((site) => {
+                const siteAlerts = site.fault_alerts?.length || 0;
+                const status = !site.grid_online ? "Grid offline" : siteAlerts ? "Attention" : "Normal";
+                return <tr key={site.tenant_id + site.site_id} onClick={() => setSelected(site.site_id)} className={active?.site_id === site.site_id ? "selected-row" : ""}>
+                  <td><button className="site-name-button">{site.site_name || site.site_id}<small>{site.site_id} · {site.brand}</small></button>{site.data_source === "DEMO" && <span className="demo-tag">Demo</span>}</td>
+                  <td><span className={"status-chip " + (!site.grid_online ? "status-offline" : siteAlerts ? "status-attention" : "status-normal")}><i/>{status}</span></td>
+                  <td><b>{number(site.solar_generation_kw)} kW</b><small className="cell-sub">of {number(site.facility_load_kw)} kW demand</small></td>
+                  <td><div className="battery-cell"><Battery size={15}/><b>{Math.round(site.battery_soc_pct)}%</b></div><small className="cell-sub">SOH {Math.round(site.battery_soh_pct)}%</small></td>
+                  <td><span className={"health-score " + (site.energy_health_score < 70 ? "health-low" : "")}>{Math.round(site.energy_health_score)}</span></td>
+                  <td className="last-seen">{age(site.timestamp)}</td>
+                </tr>;
+              })}{!visible.length && <tr><td colSpan={6} className="empty-row">{loading ? "Loading site telemetry…" : "No sites match this view."}</td></tr>}</tbody>
+            </table></div>
+            <div className="panel-foot"><span><i className="tiny-live"/> Telemetry is refreshed every 10 seconds</span><span>Site state is advisory; dispatch controls are not enabled</span></div>
+          </section>
+
+          <section className="panel alert-panel" id="alerts">
+            <div className="panel-heading"><div><h2>Alert queue</h2><p>Conditions requiring operator review</p></div><span className="count-pill">{alerts.length} open</span></div>
+            <div className="alert-list">{alerts.length ? alerts.slice(0, 6).map((item, index) => <article className="alert-item" key={item.site.site_id + item.type + index}><span className={"alert-symbol " + (item.severity.toUpperCase() === "CRITICAL" ? "alert-critical" : "alert-warning")}><AlertTriangle size={16}/></span><div><div className="alert-title">{item.type.replaceAll("_", " ")}<span className={item.severity.toUpperCase() === "CRITICAL" ? "severity-critical" : "severity-warning"}>{item.severity}</span></div><p>{item.message}</p><small>{item.site.site_name || item.site.site_id} · {age(item.site.timestamp)}</small></div></article>) : <div className="no-alerts"><CheckCircle2 size={23}/><b>All clear</b><span>No active fault alerts reported by connected sites.</span></div>}</div>
+            <div className="alert-foot">Alerts are generated from reported telemetry conditions.</div>
+          </section>
         </div>
-      </section>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        {sites.map((site) => (
-          <div key={site.site_id} className="relative overflow-hidden rounded-xl border border-gray-800 bg-[#121826] p-5 shadow-2xl">
-            <div
-              className={`absolute left-0 right-0 top-0 h-1 ${
-                site.optimization?.primary_command.includes("EMERGENCY")
-                  ? "bg-red-500"
-                  : site.optimization?.primary_command.includes("PEAK_SHAVE")
-                    ? "bg-amber-500"
-                    : "bg-emerald-500"
-              }`}
-            />
-
-            <div className="mb-4 flex items-start justify-between">
-              <div>
-                <h3 className="text-lg font-bold tracking-tight">{site.site_name || site.site_id}</h3>
-                <span className="rounded bg-gray-800 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest text-gray-400">
-                  {site.brand} INVERTER CONTROLLER
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="block text-2xl font-black font-mono text-emerald-400">{site.energy_health_score}</span>
-                <span className="text-[9px] uppercase tracking-wider text-gray-500">HEALTH SCORE</span>
-              </div>
-            </div>
-
-            <div className="mb-5 grid grid-cols-2 gap-3 font-mono">
-              <div className="flex items-center gap-3 rounded-lg bg-[#1C2333] p-3">
-                <Sun className="h-5 w-5 shrink-0 text-amber-400" />
-                <div>
-                  <span className="block text-xs text-gray-400">SOLAR YIELD</span>
-                  <span className="text-md font-bold">{site.solar_generation_kw} kW</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 rounded-lg bg-[#1C2333] p-3">
-                <Zap className="h-5 w-5 shrink-0 text-blue-400" />
-                <div>
-                  <span className="block text-xs text-gray-400">DEMAND LOAD</span>
-                  <span className="text-md font-bold">{site.facility_load_kw} kW</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 rounded-lg bg-[#1C2333] p-3">
-                <Battery className={`${site.battery_soc_pct < 30 ? "text-red-400" : "text-emerald-400"} h-5 w-5 shrink-0`} />
-                <div>
-                  <span className="block text-xs text-gray-400">BESS CAPACITY</span>
-                  <span className="text-md font-bold">
-                    {site.battery_soc_pct}% <span className="text-[10px] text-gray-500">SoC</span>
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 rounded-lg bg-[#1C2333] p-3">
-                <Coins className="h-5 w-5 shrink-0 text-yellow-500" />
-                <div>
-                  <span className="block text-xs text-gray-400">KPLC TARIFF</span>
-                  <span className="text-md font-bold text-yellow-400">
-                    {site.current_tariff_kes} <span className="text-[9px] text-gray-400">KES/kWh</span>
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mb-4 rounded-xl border border-gray-800 bg-slate-950/60 p-3 font-mono text-xs">
-              <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">🤖 Active Optimization Control Log</div>
-              <div className="mb-3 rounded border-l-2 border-emerald-500 bg-emerald-950/20 py-1 pl-2 font-bold text-emerald-400">
-                ⚡ COMMAND: {site.optimization?.primary_command.replace(/_/g, " ")}
-              </div>
-
-              <div className="space-y-1.5 text-[11px] text-gray-400">
-                <div className="flex justify-between">
-                  <span>Grid Sourcing Draw:</span>
-                  <span className="font-bold text-gray-200">{site.optimization?.dispatch_log?.grid_draw_kw} kW</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Battery Load Discharge:</span>
-                  <span className="font-bold text-gray-200">{site.optimization?.dispatch_log?.battery_discharge_kw} kW</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Battery Charge Absorption:</span>
-                  <span className="font-bold text-gray-200">{site.optimization?.dispatch_log?.battery_charge_kw} kW</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Diesel Generator Override:</span>
-                  <span className="font-bold text-gray-200">{site.optimization?.dispatch_log?.diesel_draw_kw} kW</span>
-                </div>
-              </div>
-            </div>
-
-            {site.carbon_intelligence && (
-              <div className="mb-4 flex items-center justify-between rounded-lg border border-emerald-900/30 bg-emerald-950/20 p-2.5 font-mono text-xs text-emerald-300">
-                <div className="flex items-center gap-2">
-                  <Leaf className="h-4 w-4 text-emerald-400" />
-                  <span>Carbon Avoided Tracker:</span>
-                </div>
-                <span className="font-bold">{site.carbon_intelligence.cumulative_co2_saved_metric_tons} Tonnes CO₂</span>
-              </div>
-            )}
-
-            <div>
-              <div className="mb-2 text-[10px] font-mono font-bold uppercase tracking-wider text-gray-500">⚠️ Diagnostics Subsystem Arrays</div>
-              {site.fault_alerts && site.fault_alerts.length > 0 ? (
-                <div className="space-y-2">
-                  {site.fault_alerts.map((alert, idx) => (
-                    <div key={idx} className="flex items-start gap-2.5 rounded-lg border border-red-900 bg-red-950/40 px-3 py-2 text-xs text-red-400">
-                      <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                      <div>
-                        <span className="block text-[10px] font-mono font-bold tracking-wide">{alert.type}</span>
-                        <p className="mt-0.5 font-sans text-[11px] text-red-300">{alert.message}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 rounded-lg border border-gray-900 bg-gray-950/40 px-3 py-1.5 text-xs font-mono text-gray-400">
-                  <CheckCircle className="h-4 w-4 text-emerald-400" />
-                  Array registers operational. No critical safety warnings flagged.
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
+        <section className="panel performance-panel" id="performance">
+          <div className="panel-heading"><div><h2>Site performance</h2><p>{active ? (active.site_name || active.site_id) + " · Solar generation and facility demand" : "Select a site to inspect its trend"}</p></div><span className="history-label"><Clock3 size={14}/>Last 24 hours</span></div>
+          <div className="chart-wrap">{samples.length > 1 ? <><div className="chart-legend"><span><i className="legend-solar"/>Solar generation</span><span><i className="legend-load"/>Facility demand</span></div><svg viewBox="0 0 600 160" preserveAspectRatio="none" role="img" aria-label="Solar and demand trend"><path className="chart-gridline" d="M0 25H600 M0 65H600 M0 105H600 M0 145H600"/><path className="chart-area" d={chartPoints("solar_generation_kw") + " L600 150 L0 150 Z"}/><path className="chart-line solar-line" d={chartPoints("solar_generation_kw")}/><path className="chart-line load-line" d={chartPoints("facility_load_kw")}/></svg><div className="chart-axis"><span>Oldest reading</span><span>Most recent</span></div></> : <div className="chart-empty"><Activity size={21}/><b>{active?.data_source === "DEMO" ? "Waiting for recorded history" : "No history available yet"}</b><span>Trend lines appear after telemetry readings have been stored for this site.</span></div>}</div>
+          <div className="panel-foot"><span>History is sourced from stored telemetry</span>{active && <span>{active.data_source === "DEMO" ? "Demo snapshot" : "Live telemetry"} · Current tariff KES {active.current_tariff_kes}/kWh</span>}</div>
+        </section>
+        <footer className="ops-footer"><span>Vuma Grid DERMS · Operations workspace</span><span>Read-only monitoring · Local time {new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}</span></footer>
       </div>
-
-      <section className="mt-8 border-t border-gray-800 pt-6">
-        <h2 className="text-xl font-bold text-amber-400 mb-4 flex items-center gap-2 font-mono">
-          📊 STRATEGIC ASSET INVESTMENT SIMULATOR (WHAT-IF ANALYSIS)
-        </h2>
-        <div className="bg-[#121826] border border-gray-800 rounded-xl p-5 grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
-          <div className="space-y-3 font-mono text-xs text-gray-300">
-            <div>
-              <label className="block text-gray-500 mb-1">TARGET FACILITY GRID NODE</label>
-              <select value={selectedSite} onChange={(e) => setSelectedSite(e.target.value)} className="w-full bg-[#1C2333] border border-gray-700 rounded p-2 text-white">
-                <option value="VUMA-THK-IND">Thika Textile Factory</option>
-                <option value="VUMA-NBO-HOSP">Nairobi Uptown Hospital</option>
-                <option value="VUMA-MSA-MALL">Mombasa Retail Center</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-gray-500 mb-1">PROPOSED BESS STORAGE UPGRADE (kWh)</label>
-              <input type="number" value={upgradeKwh} onChange={(e) => setUpgradeKwh(Number(e.target.value))} className="w-full bg-[#1C2333] border border-gray-700 rounded p-2 text-white" />
-            </div>
-            <div>
-              <label className="block text-gray-500 mb-1">TOTAL ASSET ACQUISITION COST (KES)</label>
-              <input type="number" value={costKes} onChange={(e) => setCostKes(Number(e.target.value))} className="w-full bg-[#1C2333] border border-gray-700 rounded p-2 text-white" />
-            </div>
-            <button onClick={executeInvestmentSimulation} disabled={simulating} className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold p-2.5 rounded transition font-sans text-sm tracking-wide">
-              {simulating ? 'COMPUTING EXPANSION MATRIX...' : 'RUN DECISION CORE RUNTIME'}
-            </button>
-          </div>
-
-          <div className="md:col-span-3 bg-slate-950/80 rounded-xl border border-gray-800 p-5 min-h-[180px] flex flex-col justify-center">
-            {simResult ? (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono">
-                <div className="border border-gray-800 p-4 rounded-lg bg-[#121826]/40">
-                  <span className="text-[10px] text-gray-500 block uppercase">Projected Annual Savings</span>
-                  <span className="text-xl font-bold text-emerald-400">KES {simResult.annual_savings_kes.toLocaleString()}</span>
-                </div>
-                <div className="border border-gray-800 p-4 rounded-lg bg-[#121826]/40">
-                  <span className="text-[10px] text-gray-500 block uppercase">Amortized Payback Window</span>
-                  <span className="text-xl font-bold text-amber-400">{simResult.payback_period_years} Years</span>
-                </div>
-                <div className="border border-gray-800 p-4 rounded-lg bg-[#121826]/40">
-                  <span className="text-[10px] text-gray-500 block uppercase">Incremental ESG Carbon Offset</span>
-                  <span className="text-xl font-bold text-blue-400">{simResult.annual_co2_offset_tonnes} Metric Tons/Yr</span>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center text-gray-500 text-xs font-mono">
-                Enter proposed capital infrastructure bounds and execute the decision matrix solver to render real-time payback simulations.
-              </div>
-            )}
-           </div>
-        </div>
-      </section>
-
-      <section className="mt-8 border-t border-gray-800 pt-6 mb-12">
-        <h2 className="text-xl font-bold text-emerald-400 mb-4 flex items-center gap-2 font-mono">
-          SELF-SERVICE HARDWARE ONBOARDING GATEWAY (NEW USER ACCELERATOR)
-        </h2>
-        <div className="bg-[#121826] border border-gray-800 rounded-xl p-5 grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-
-          <div className="space-y-3 font-mono text-xs text-gray-300 md:col-span-1">
-            <div>
-              <label className="block text-gray-500 mb-1">FACILITY / PROPERTY NAME</label>
-              <input type="text" value={newOrgName} onChange={(e) => setNewOrgName(e.target.value)} className="w-full bg-[#1C2333] border border-gray-700 rounded p-2 text-white" placeholder="e.g. Kericho Tea Estate" />
-            </div>
-            <div>
-              <label className="block text-gray-500 mb-1">ASSET CLASSIFICATION MATRIX</label>
-              <select value={newAssetType} onChange={(e) => setNewAssetType(e.target.value)} className="w-full bg-[#1C2333] border border-gray-700 rounded p-2 text-white">
-                <option value="AGRICULTURAL">AGRICULTURAL FARM / PLANTATION</option>
-                <option value="RESIDENTIAL">RESIDENTIAL ESTATE / SMART HOME</option>
-                <option value="COMMERCIAL">COMMERCIAL BUSINESS PARK</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-gray-500 mb-1">NATIVE HARDWARE MANUFACTURER INVERTER BRAND</label>
-              <select value={newBrand} onChange={(e) => setNewBrand(e.target.value)} className="w-full bg-[#1C2333] border border-gray-700 rounded p-2 text-white">
-                <option value="VICTRON_ENERGY">VICTRON ENERGY (VENUS OS CORE)</option>
-                <option value="HUAWEI_SUN2000">HUAWEI SMART PV SYSTEM</option>
-              </select>
-            </div>
-            <button onClick={handleOnboardNewAsset} disabled={isOnboarding} className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold p-2.5 rounded transition font-sans text-sm tracking-wide">
-              {isOnboarding ? 'ESTABLISHING HANDSHAKE LINK...' : 'GENERATE WEBHOOK & INITIALIZE ASSET'}
-            </button>
-          </div>
-
-          <div className="md:col-span-2 bg-slate-950/80 rounded-xl border border-gray-800 p-5 min-h-[160px] flex flex-col justify-center font-mono">
-            <div className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">VumaGrid Automated Webhook Provisioning Terminal</div>
-            {onboardedMessage ? (
-              <div className="space-y-3 text-xs">
-                <p className="text-emerald-400 font-bold">{onboardedMessage}</p>
-                <div className="bg-[#121826] p-3 rounded border border-gray-800 text-[11px] text-gray-400 select-all cursor-pointer">
-                  {'// Production Integration Endpoint Hook - Paste this straight into your physical device gateway config:'}<br/>
-                  <span className="text-yellow-400 font-bold">{'http://api.vumagrid.ke' + (newBrand === 'HUAWEI_SUN2000' ? '/telemetry/huawei' : '/telemetry/victron') + '?tenant_id=' + 'ORG-' + newOrgName.toUpperCase().replace(/\s+/g, '-')}</span>
-                </div>
-                <p className="text-gray-500 text-[11px] font-sans">Tip: Now scroll up to your &apos;Active Corporate Tenants&apos; filter menu at the top of your dashboard. Select your newly onboarded asset to view its metrics stream isolations live!</p>
-              </div>
-            ) : (
-              <div className="text-center text-gray-500 text-xs py-4">
-                Awaiting new entity parameters. Register a custom smart-home or plantation node above to simulate cross-network self-service automation pipelines.
-              </div>
-            )}
-          </div>
-
-        </div>
-      </section>
-    </main>
-  );
+    </section>
+  </main>;
 }

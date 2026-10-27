@@ -8,6 +8,9 @@ venv/
 env/
 ENV/
 .env
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
 
 # Node
 node_modules/

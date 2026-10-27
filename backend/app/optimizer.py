@@ -1,9 +1,11 @@
+from datetime import datetime
+
 import pulp
 
 
 class EnergyOrchestrator:
     @staticmethod
-    def optimize_dispatch(solar_kw: float, load_kw: float, soc_pct: float, grid_online: bool, tariff_kes: float) -> dict:
+    def optimize_dispatch(solar_kw: float, load_kw: float, soc_pct: float, grid_online: bool, tariff_kes: float, max_battery_discharge_kw: float = 100.0) -> dict:
         """
         Solves a Linear Programming optimization matrix to find the cheapest
         combination of power sources to run the building at this exact second.
@@ -36,7 +38,7 @@ class EnergyOrchestrator:
         if soc_pct <= 20.0:
             prob += p_battery_discharge == 0
         else:
-            prob += p_battery_discharge <= 100.0
+            prob += p_battery_discharge <= max(0.0, max_battery_discharge_kw)
 
         if soc_pct >= 95.0:
             prob += p_battery_charge == 0
@@ -52,7 +54,17 @@ class EnergyOrchestrator:
         status = pulp.LpStatus[prob.status]
 
         if status != "Optimal":
-            return {"action": "MAINTAIN_GRID_FALLBACK", "dispatch_log": {}}
+            return {
+                "status": status,
+                "primary_command": "MAINTAIN_GRID_FALLBACK",
+                "dispatch_log": {
+                    "grid_draw_kw": 0.0,
+                    "battery_discharge_kw": 0.0,
+                    "battery_charge_kw": 0.0,
+                    "diesel_draw_kw": 0.0,
+                    "solar_utilized_kw": 0.0,
+                },
+            }
 
         grid_val = pulp.value(p_grid)
         bat_dis_val = pulp.value(p_battery_discharge)
@@ -88,35 +100,60 @@ class EnergyOrchestrator:
         """
         total_cost_current = 0.0
         total_cost_upgraded = 0.0
+        avoided_grid_kwh = 0.0
+        # Telemetry samples are rates. Weight each solve by the elapsed time to the next sample.
+        sample_durations_hours = []
+        for index, log in enumerate(historical_logs):
+            if index + 1 < len(historical_logs):
+                elapsed = (datetime.fromisoformat(historical_logs[index + 1]["timestamp"]) - datetime.fromisoformat(log["timestamp"])).total_seconds() / 3600
+            else:
+                elapsed = 0.0
+            sample_durations_hours.append(max(0.0, elapsed))
 
-        for log in historical_logs:
+        for index, log in enumerate(historical_logs):
             solar = log["solar_generation_kw"]
             load = log["facility_load_kw"]
             tariff = log["current_tariff_kes"]
             grid_online = log["grid_online"]
+            soc_pct = log["battery_soc_pct"]
+            duration_hours = sample_durations_hours[index]
 
-            res_current = EnergyOrchestrator.optimize_dispatch(solar, load, 50.0, grid_online, tariff)
+            if duration_hours <= 0:
+                continue
+
+            res_current = EnergyOrchestrator.optimize_dispatch(
+                solar, load, soc_pct, grid_online, tariff,
+                max_battery_discharge_kw=current_bess_kwh * 0.4,
+            )
             if res_current["status"] == "Optimal":
                 log_data = res_current["dispatch_log"]
-                total_cost_current += (log_data["grid_draw_kw"] * tariff) + (log_data["diesel_draw_kw"] * 45.0)
+                current_grid_kwh = log_data["grid_draw_kw"] * duration_hours
+                total_cost_current += (current_grid_kwh * tariff) + (log_data["diesel_draw_kw"] * 45.0 * duration_hours)
+            else:
+                current_grid_kwh = 0.0
 
             prob = pulp.LpProblem("Simulation_Step", pulp.LpMinimize)
             p_grid = pulp.LpVariable("G", lowBound=0)
             p_bat_dis = pulp.LpVariable("BD", lowBound=0)
             p_bat_chg = pulp.LpVariable("BC", lowBound=0)
             p_solar = pulp.LpVariable("S", lowBound=0)
+            p_diesel = pulp.LpVariable("D", lowBound=0)
 
-            prob += (p_grid * tariff) + (p_bat_dis * 0.50)
-            prob += p_solar + p_grid + p_bat_dis == load + p_bat_chg
+            prob += (p_grid * tariff) + (p_bat_dis * 0.50) + (p_diesel * 45.0)
+            prob += p_solar + p_grid + p_bat_dis + p_diesel == load + p_bat_chg
             prob += p_solar <= solar
 
             if not grid_online:
                 prob += p_grid == 0
+            else:
+                prob += p_diesel == 0
 
-            max_discharge_allowed = upgraded_bess_kwh * 0.4
+            max_discharge_allowed = upgraded_bess_kwh * 0.4 if soc_pct > 20.0 else 0.0
             prob += p_bat_dis <= max_discharge_allowed
 
-            if tariff <= 12.00:
+            if soc_pct >= 95.0:
+                prob += p_bat_chg == 0
+            elif tariff <= 12.00:
                 prob += p_bat_chg <= (upgraded_bess_kwh * 0.2)
             else:
                 prob += p_bat_chg <= max(0, solar - load)
@@ -124,19 +161,26 @@ class EnergyOrchestrator:
             prob.solve(pulp.PULP_CBC_CMD(msg=False))
 
             if pulp.LpStatus[prob.status] == "Optimal":
-                total_cost_upgraded += (pulp.value(p_grid) * tariff)
+                upgraded_grid_kwh = pulp.value(p_grid) * duration_hours
+                total_cost_upgraded += (upgraded_grid_kwh * tariff) + (pulp.value(p_diesel) * 45.0 * duration_hours)
+                avoided_grid_kwh += max(0.0, current_grid_kwh - upgraded_grid_kwh)
             else:
-                total_cost_upgraded += total_cost_current
+                total_cost_upgraded += current_grid_kwh * tariff
 
-        daily_savings = max(0.0, total_cost_current - total_cost_upgraded)
-        annual_savings_kes = daily_savings * 365
+        observed_hours = sum(sample_durations_hours)
+        average_daily_savings = max(0.0, total_cost_current - total_cost_upgraded) / (observed_hours / 24.0)
+        annual_savings_kes = average_daily_savings * 365
 
         payback_years = round(battery_cost_kes / annual_savings_kes, 1) if annual_savings_kes > 0 else 0.0
-        co2_saved_tons_annual = round((annual_savings_kes / tariff) * 0.38 / 1000, 2) if tariff > 0 else 0.0
+        annual_avoided_grid_kwh = avoided_grid_kwh / (observed_hours / 24.0) * 365
+        co2_saved_tons_annual = round(annual_avoided_grid_kwh * 0.38 / 1000, 2)
 
         return {
             "annual_savings_kes": round(annual_savings_kes, 2),
             "payback_period_years": payback_years if payback_years > 0 else "N/A",
             "annual_co2_offset_tonnes": co2_saved_tons_annual,
-            "simulated_days": 1
+            "simulated_days": round(observed_hours / 24.0, 1),
+            "observed_window_hours": round(observed_hours, 1),
+            "estimate_basis": "Average observed-window savings annualized to 365 days; seasonality, tariff changes, inverter efficiency, and battery degradation are not modeled.",
+            "state_of_charge_method": "Uses assumed 0.4C discharge and 0.2C charge rates. Measured state of charge is applied independently to each sample; battery state is not advanced between samples.",
         }
