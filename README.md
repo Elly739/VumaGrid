@@ -88,6 +88,8 @@ source venv/bin/activate
 python simulator.py
 ```
 
+Keep the simulator running while using the showcase. It sends a new reading for each sample site every five seconds. The operator dashboard polls site state and stored history on the same five-second cadence, shows when the latest site reading arrived, and labels the feed as paused when updates stop.
+
 ### 3. Frontend Terminal Control Interface
 Open a third terminal instance and execute:
 ```bash
