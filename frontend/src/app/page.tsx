@@ -1,11 +1,11 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, Battery, CheckCircle2, ChevronRight, CircleHelp, Clock3, Leaf, MapPin, RefreshCw, Search, Sun, Zap } from "lucide-react";
-import { apiRequest, apiUrl, setAccessToken } from "@/lib/api";
+import { apiRequest, downloadFile, setAccessToken } from "@/lib/api";
 
 type View = "overview" | "sites" | "alerts" | "performance";
-type Alert = { severity: string; type: string; message: string };
+type Alert = { id: number; severity: string; type: string; message: string; acknowledged_at?: string | null };
 type Site = {
   tenant_id: string; site_id: string; site_name?: string; data_source?: string; brand: string;
   timestamp?: string; solar_generation_kw: number; facility_load_kw: number; battery_soc_pct: number;
@@ -43,6 +43,7 @@ export default function OperationsDashboard() {
   const [accessToken, setAccessTokenInput] = useState("");
   const [hasAccessToken, setHasAccessToken] = useState(false);
   const [alertFilter, setAlertFilter] = useState<"all" | "critical" | "warning">("all");
+  const sessionVersion = useRef(0);
 
   const navigate = (next: View) => {
     setView(next);
@@ -50,15 +51,21 @@ export default function OperationsDashboard() {
   };
 
   const refresh = useCallback(async () => {
+    const requestVersion = sessionVersion.current;
     try {
       const query = tenant ? "?tenant_id=" + encodeURIComponent(tenant) : "";
       const data = await apiRequest<Site[]>("/api/v1/dashboard/state" + query);
+      if (requestVersion !== sessionVersion.current) return;
       setSites(data);
       setError("");
       setUpdated(new Date());
       setSelected((current) => data.some((site) => site.site_id === current) ? current : (data[0]?.site_id || ""));
-    } catch (err) { setError(err instanceof Error ? err.message : "Could not load site data."); }
-    finally { setLoading(false); }
+    } catch (err) {
+      if (requestVersion !== sessionVersion.current) return;
+      setError(err instanceof Error ? err.message : "Could not load site data.");
+    } finally {
+      if (requestVersion === sessionVersion.current) setLoading(false);
+    }
   }, [tenant]);
 
   useEffect(() => {
@@ -85,6 +92,7 @@ export default function OperationsDashboard() {
 
   const connectWithToken = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    sessionVersion.current += 1;
     setAccessToken(accessToken.trim());
     setAccessTokenInput("");
     setHasAccessToken(Boolean(accessToken.trim()));
@@ -92,20 +100,35 @@ export default function OperationsDashboard() {
     refresh();
   };
   const disconnect = () => {
+    sessionVersion.current += 1;
     setAccessToken("");
+    setAccessTokenInput("");
     setHasAccessToken(false);
+    setSites([]);
+    setSamples([]);
+    setTenants([]);
+    setTenant("");
+    setSelected("");
+    setUpdated(null);
+    setLoading(false);
     setError("A valid bearer access token is required.");
   };
 
   const active = sites.find((site) => site.site_id === selected) || sites[0];
+  const activeSiteId = active?.site_id;
+  const activeTenantId = active?.tenant_id;
   const reloadHistory = useCallback(async () => {
-    if (!active) { setSamples([]); return; }
+    const requestVersion = sessionVersion.current;
+    if (!activeSiteId || !activeTenantId) { setSamples([]); return; }
     try {
-      const query = "?tenant_id=" + encodeURIComponent(active.tenant_id) + "&hours=24";
-      const rows = await apiRequest<Sample[]>("/api/v1/sites/" + encodeURIComponent(active.site_id) + "/history" + query);
+      const query = "?tenant_id=" + encodeURIComponent(activeTenantId) + "&hours=24";
+      const rows = await apiRequest<Sample[]>("/api/v1/sites/" + encodeURIComponent(activeSiteId) + "/history" + query);
+      if (requestVersion !== sessionVersion.current) return;
       setSamples(rows);
-    } catch { setSamples([]); }
-  }, [active?.site_id, active?.tenant_id]);
+    } catch {
+      if (requestVersion === sessionVersion.current) setSamples([]);
+    }
+  }, [activeSiteId, activeTenantId]);
   useEffect(() => {
     reloadHistory();
     const poll = window.setInterval(reloadHistory, 5000);
@@ -121,6 +144,7 @@ export default function OperationsDashboard() {
   const totalSolar = sites.reduce((sum, site) => sum + (site.solar_generation_kw || 0), 0);
   const totalLoad = sites.reduce((sum, site) => sum + (site.facility_load_kw || 0), 0);
   const latestTelemetry = Math.max(0, ...sites.map((site) => site.timestamp ? new Date(site.timestamp).getTime() : 0));
+  const latestSite = sites.find((site) => site.timestamp && new Date(site.timestamp).getTime() === latestTelemetry);
   const feedAge = latestTelemetry ? Math.max(0, Math.floor((now - latestTelemetry) / 1000)) : null;
   const feedState = feedAge === null ? "waiting" : feedAge <= 15 ? "receiving" : "stale";
   const maxPower = Math.max(1, ...samples.flatMap((sample) => [sample.solar_generation_kw, sample.facility_load_kw]));
@@ -130,6 +154,25 @@ export default function OperationsDashboard() {
     return (i ? "L" : "M") + x + " " + y;
   }).join(" ");
 
+  const exportReport = async () => {
+    try {
+      const query = tenant ? "?tenant_id=" + encodeURIComponent(tenant) : "";
+      await downloadFile("/api/v1/analytics/export-esg-report" + query, "VumaGrid-ESG-summary.pdf");
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not download the ESG report.");
+    }
+  };
+
+  const acknowledgeAlert = async (alertId: number) => {
+    try {
+      await apiRequest(`/api/v1/alerts/${alertId}/acknowledge`, { method: "POST" });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not acknowledge this alert.");
+    }
+  };
+
   const siteTable = <section className="panel site-panel">
     <div className="panel-heading"><div><h2>Site health</h2><p>Live status and key readings from each connected site</p></div><span className="count-pill">{visible.length} sites</span></div>
     <div className="site-toolbar"><label className="search-box"><Search size={16}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search sites"/></label><span className="updated-label"><i className="tiny-live"/> Auto refresh every 5 seconds</span></div>
@@ -138,7 +181,7 @@ export default function OperationsDashboard() {
         const siteAlerts = site.fault_alerts?.length || 0;
         const status = !site.grid_online ? "Grid offline" : siteAlerts ? "Attention" : "Normal";
         return <tr key={site.tenant_id + site.site_id} onClick={() => { setSelected(site.site_id); navigate("performance"); }} className={active?.site_id === site.site_id ? "selected-row" : ""}>
-          <td><button className="site-name-button">{site.site_name || site.site_id}<small>{site.site_id} · {site.brand}</small></button>{site.data_source === "DEMO" && <span className="demo-tag">Demo snapshot</span>}</td>
+          <td><button className="site-name-button">{site.site_name || site.site_id}<small>{site.site_id} · {site.brand}</small></button>{(site.data_source === "DEMO" || site.data_source === "SIMULATED") && <span className="demo-tag">{site.data_source === "SIMULATED" ? "Simulated" : "Demo snapshot"}</span>}</td>
           <td><span className={"status-chip " + (!site.grid_online ? "status-offline" : siteAlerts ? "status-attention" : "status-normal")}><i/>{status}</span></td>
           <td><b>{number(site.solar_generation_kw)} kW</b><small className="cell-sub">of {number(site.facility_load_kw)} kW demand</small></td>
           <td><div className="battery-cell"><Battery size={15}/><b>{Math.round(site.battery_soc_pct)}%</b></div><small className="cell-sub">SOH {Math.round(site.battery_soh_pct)}%</small></td>
@@ -155,8 +198,8 @@ export default function OperationsDashboard() {
     <div className="alert-filters" role="group" aria-label="Filter alerts">
       {(["all", "critical", "warning"] as const).map((filter) => <button key={filter} className={alertFilter === filter ? "filter-active" : ""} onClick={() => setAlertFilter(filter)}>{filter === "all" ? "All alerts" : filter[0].toUpperCase() + filter.slice(1)}<span>{filter === "all" ? alerts.length : alerts.filter((item) => item.severity.toLowerCase() === filter).length}</span></button>)}
     </div>
-    <div className="alert-list">{visibleAlerts.length ? visibleAlerts.map((item, index) => <article className="alert-item" key={item.site.site_id + item.type + index}><span className={"alert-symbol " + (item.severity.toUpperCase() === "CRITICAL" ? "alert-critical" : "alert-warning")}><AlertTriangle size={16}/></span><div><div className="alert-title">{item.type.replaceAll("_", " ")}<span className={item.severity.toUpperCase() === "CRITICAL" ? "severity-critical" : "severity-warning"}>{item.severity}</span></div><p>{item.message}</p><small>{item.site.site_name || item.site.site_id} · Reading {secondsAgo(item.site.timestamp, now)}</small></div><button className="alert-site-link" onClick={() => { setSelected(item.site.site_id); navigate("sites"); }}>View site</button></article>) : <div className="no-alerts"><CheckCircle2 size={23}/><b>{alerts.length ? "No alerts in this filter" : "No active conditions"}</b><span>{alerts.length ? "Choose another severity to see reported conditions." : "Your sites are not currently reporting a rule-based fault."}</span></div>}</div>
-    <div className="alert-foot">This queue reflects current reported telemetry; alert acknowledgement and history are not available yet.</div>
+    <div className="alert-list">{visibleAlerts.length ? visibleAlerts.map((item) => <article className="alert-item" key={item.id}><span className={"alert-symbol " + (item.severity.toUpperCase() === "CRITICAL" ? "alert-critical" : "alert-warning")}><AlertTriangle size={16}/></span><div><div className="alert-title">{item.type.replaceAll("_", " ")}<span className={item.severity.toUpperCase() === "CRITICAL" ? "severity-critical" : "severity-warning"}>{item.severity}</span></div><p>{item.message}</p><small>{item.site.site_name || item.site.site_id} · Reading {secondsAgo(item.site.timestamp, now)}</small></div><div className="alert-actions"><button className="alert-site-link" onClick={() => { setSelected(item.site.site_id); navigate("sites"); }}>View site</button>{item.acknowledged_at ? <span className="acknowledged-label">Acknowledged</span> : <button className="alert-acknowledge" onClick={() => acknowledgeAlert(item.id)}>Acknowledge</button>}</div></article>) : <div className="no-alerts"><CheckCircle2 size={23}/><b>{alerts.length ? "No alerts in this filter" : "No active conditions"}</b><span>{alerts.length ? "Choose another severity to see reported conditions." : "Your sites are not currently reporting a rule-based fault."}</span></div>}</div>
+    <div className="alert-foot">Acknowledgements are recorded by time; user-level identity and alert assignment are not available yet.</div>
   </section>;
 
   const performance = <section className="performance-view">
@@ -167,9 +210,9 @@ export default function OperationsDashboard() {
       <article className="metric-card"><div className="metric-top"><span>Battery state</span><span className="metric-icon amber"><Battery size={17}/></span></div><div className="metric-value">{Math.round(active.battery_soc_pct)}<small>%</small></div><div className="metric-foot">Health {Math.round(active.battery_soh_pct)}%</div></article>
     </div> : <div className="panel empty-performance">No sites are available in this portfolio.</div>}
     <section className="panel performance-panel">
-      <div className="panel-heading"><div><h2>Generation and demand</h2><p>{active ? (active.site_name || active.site_id) + " · readings arrive every five seconds in the simulator" : "Select a site to view its trend"}</p></div><span className="history-label">{samples.length} readings</span></div>
+      <div className="panel-heading"><div><h2>Generation and demand</h2><p>{active ? (active.site_name || active.site_id) + (active.data_source === "SIMULATED" ? " · Synthetic demo simulation" : " · Site telemetry") : "Select a site to view its trend"}</p></div><span className="history-label">{samples.length} readings · up to 24h</span></div>
       <div className="chart-wrap">{samples.length > 1 ? <><div className="chart-legend"><span><i className="legend-solar"/>Solar generation</span><span><i className="legend-load"/>Facility demand</span></div><svg viewBox="0 0 600 160" preserveAspectRatio="none" role="img" aria-label="Solar generation and demand trend"><path className="chart-gridline" d="M0 25H600 M0 65H600 M0 105H600 M0 145H600"/><path className="chart-area" d={chartPoints("solar_generation_kw") + " L600 150 L0 150 Z"}/><path className="chart-line solar-line" d={chartPoints("solar_generation_kw")}/><path className="chart-line load-line" d={chartPoints("facility_load_kw")}/></svg><div className="chart-axis"><span>Oldest stored reading</span><span>Most recent</span></div></> : <div className="chart-empty"><Activity size={21}/><b>{active?.data_source === "DEMO" ? "Demo snapshot is not a live stream" : "Waiting for simulator readings"}</b><span>Start backend/simulator.py to send changing telemetry every five seconds.</span></div>}</div>
-      <div className="panel-foot"><span>History comes from stored telemetry, refreshed every five seconds</span>{active && <span>{active.site_id} · KES {active.current_tariff_kes}/kWh</span>}</div>
+      <div className="panel-foot"><span>Showing up to 500 recent stored samples from the past 24 hours</span>{active && <span>{active.site_id} · KES {active.current_tariff_kes}/kWh</span>}</div>
     </section>
     <section className="panel recent-readings"><div className="panel-heading"><div><h2>Recent readings</h2><p>Latest samples received by the backend</p></div></div><div className="table-scroll"><table><thead><tr><th>TIME</th><th>SOLAR</th><th>FACILITY DEMAND</th><th>DIFFERENCE</th></tr></thead><tbody>{samples.slice(-8).reverse().map((sample,index) => <tr key={sample.timestamp + index}><td>{new Date(sample.timestamp).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})}</td><td>{number(sample.solar_generation_kw)} kW</td><td>{number(sample.facility_load_kw)} kW</td><td>{number(sample.solar_generation_kw - sample.facility_load_kw)} kW</td></tr>)}</tbody></table></div></section>
   </section>;
@@ -183,7 +226,7 @@ export default function OperationsDashboard() {
       <button className={"nav-item " + (view === "alerts" ? "active" : "")} onClick={() => navigate("alerts")}><AlertTriangle size={17}/>Alerts <span className="nav-count alert-count">{alerts.length}</span></button>
       <div className="nav-label nav-spaced">TOOLS</div>
       <button className={"nav-item " + (view === "performance" ? "active" : "")} onClick={() => navigate("performance")}><Zap size={17}/>Performance</button>
-      <a className="nav-item" href={apiUrl("/api/v1/analytics/export-esg-report" + (tenant ? "?tenant_id=" + encodeURIComponent(tenant) : ""))}><Leaf size={17}/>ESG report</a>
+      <button className="nav-item" onClick={exportReport}><Leaf size={17}/>ESG report</button>
       <div className="sidebar-bottom"><div className="operator"><span className="operator-avatar">OP</span><span>Operations team<small>Site monitor</small></span><CircleHelp size={16}/></div><div className="sidebar-note">Vuma Grid DERMS <span>v1.1</span></div></div>
     </aside>
 
@@ -191,7 +234,7 @@ export default function OperationsDashboard() {
       <header className="ops-topbar">
         <div className="mobile-brand">Vuma<span>Grid</span></div>
         <div className="breadcrumbs">Operations <ChevronRight size={14}/> <b>{views[view].title}</b></div>
-        <div className="top-actions"><span className={"live-indicator " + (feedState === "stale" ? "feed-stale" : feedState === "waiting" ? "feed-waiting" : "")}><i/>{feedState === "receiving" ? "Live simulator feed" : feedState === "waiting" ? "Waiting for telemetry" : "Telemetry paused"}</span><span className="updated-label"><Clock3 size={14}/>{feedAge === null ? "No readings" : "Last reading " + feedAge + "s ago"}</span>{hasAccessToken && <button className="text-button" onClick={disconnect}>Sign out</button>}<button className="icon-button" aria-label="Refresh data" onClick={refresh}><RefreshCw size={16}/></button></div>
+        <div className="top-actions"><span className={"live-indicator " + (feedState === "stale" ? "feed-stale" : feedState === "waiting" ? "feed-waiting" : "")}><i/>{feedState === "receiving" ? (latestSite?.data_source === "SIMULATED" ? "Live simulator feed" : "Live site telemetry") : feedState === "waiting" ? "Waiting for telemetry" : "Telemetry paused"}</span><span className="updated-label"><Clock3 size={14}/>{feedAge === null ? "No readings" : "Last reading " + feedAge + "s ago"}</span>{hasAccessToken && <button className="text-button" onClick={disconnect}>Sign out</button>}<button className="icon-button" aria-label="Refresh data" onClick={refresh}><RefreshCw size={16}/></button></div>
       </header>
 
       <div className="page-content">

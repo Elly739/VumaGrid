@@ -3,20 +3,30 @@
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone
+from collections.abc import Iterable, Iterator
 
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "vumagrid.db"
 DB_PATH = Path(os.getenv("VUMAGRID_DB_PATH", str(DEFAULT_DB_PATH))).expanduser()
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH, timeout=10)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = 10000")
-    return connection
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def initialize_storage() -> None:
@@ -44,6 +54,20 @@ def initialize_storage() -> None:
             );
             CREATE INDEX IF NOT EXISTS ix_telemetry_site_time
                 ON telemetry_history (tenant_id, site_id, timestamp);
+            CREATE TABLE IF NOT EXISTS alert_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id TEXT NOT NULL,
+                site_id TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                message TEXT NOT NULL,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                resolved_at TEXT,
+                acknowledged_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_alert_tenant_active
+                ON alert_history (tenant_id, resolved_at, first_seen);
             """
         )
 
@@ -99,6 +123,93 @@ def has_sites() -> bool:
     initialize_storage()
     with _connect() as connection:
         return connection.execute("SELECT 1 FROM site_state LIMIT 1").fetchone() is not None
+
+
+def sync_site_alerts(tenant_id: str, site_id: str, alerts: list[dict], timestamp: datetime) -> list[str]:
+    """Persist current conditions, resolving cleared alerts and returning newly opened types."""
+    initialize_storage()
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    timestamp_text = timestamp.astimezone(timezone.utc).isoformat()
+    current_by_type = {alert["type"]: alert for alert in alerts}
+    newly_opened: list[str] = []
+
+    with _connect() as connection:
+        open_rows = connection.execute(
+            "SELECT id, alert_type FROM alert_history WHERE tenant_id = ? AND site_id = ? AND resolved_at IS NULL",
+            (tenant_id, site_id),
+        ).fetchall()
+        open_by_type = {row["alert_type"]: row for row in open_rows}
+
+        for alert_type, row in open_by_type.items():
+            if alert_type not in current_by_type:
+                connection.execute(
+                    "UPDATE alert_history SET resolved_at = ? WHERE id = ?",
+                    (timestamp_text, row["id"]),
+                )
+
+        for alert_type, alert in current_by_type.items():
+            existing = open_by_type.get(alert_type)
+            if existing:
+                connection.execute(
+                    "UPDATE alert_history SET severity = ?, message = ?, last_seen = ? WHERE id = ?",
+                    (alert["severity"], alert["message"], timestamp_text, existing["id"]),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO alert_history
+                       (tenant_id, site_id, alert_type, severity, message, first_seen, last_seen)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (tenant_id, site_id, alert_type, alert["severity"], alert["message"], timestamp_text, timestamp_text),
+                )
+                newly_opened.append(alert_type)
+    return newly_opened
+
+
+def load_active_alerts(tenant_ids: Iterable[str] | None = None) -> list[dict]:
+    initialize_storage()
+    query = """SELECT id, tenant_id, site_id, alert_type AS type, severity, message,
+                      first_seen, last_seen, acknowledged_at
+               FROM alert_history WHERE resolved_at IS NULL"""
+    values: list[str] = []
+    if tenant_ids is not None:
+        tenant_list = list(tenant_ids)
+        if not tenant_list:
+            return []
+        placeholders = ",".join("?" for _ in tenant_list)
+        query += f" AND tenant_id IN ({placeholders})"
+        values.extend(tenant_list)
+    query += " ORDER BY first_seen DESC, id DESC"
+    with _connect() as connection:
+        rows = connection.execute(query, values).fetchall()
+    return [dict(row) for row in rows]
+
+
+def load_alert(alert_id: int) -> dict | None:
+    initialize_storage()
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT id, tenant_id, site_id, resolved_at FROM alert_history WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def acknowledge_alert(alert_id: int) -> dict | None:
+    initialize_storage()
+    acknowledged_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as connection:
+        connection.execute(
+            "UPDATE alert_history SET acknowledged_at = COALESCE(acknowledged_at, ?) WHERE id = ? AND resolved_at IS NULL",
+            (acknowledged_at, alert_id),
+        )
+        row = connection.execute(
+            """SELECT id, tenant_id, site_id, alert_type AS type, severity, message,
+                      first_seen, last_seen, resolved_at, acknowledged_at
+               FROM alert_history WHERE id = ? AND resolved_at IS NULL""",
+            (alert_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def load_site_history(

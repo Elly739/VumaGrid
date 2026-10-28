@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from .models import UnifiedTelemetry
 from .optimizer import EnergyOrchestrator
 from .security import accessible_tenants, require_ingestion_tenant, require_tenant_access
-from .storage import has_sites, initialize_storage, load_energy_totals, load_site_history, load_sites, save_telemetry
+from .storage import acknowledge_alert, has_sites, initialize_storage, load_active_alerts, load_alert, load_energy_totals, load_site_history, load_sites, save_telemetry, sync_site_alerts
 
 app = FastAPI(title="VumaGrid DERMS Core Engine", version="1.1.0")
 
@@ -116,11 +116,26 @@ def seed_demo_state_cache() -> None:
 
     for site_data in demo_sites:
         save_telemetry(site_data)
+        telemetry = UnifiedTelemetry(**site_data)
+        sync_site_alerts(
+            telemetry.tenant_id,
+            telemetry.site_id,
+            run_fault_detection_ai(telemetry),
+            telemetry.timestamp,
+        )
 
 
 @app.on_event("startup")
 def startup() -> None:
     initialize_storage()
+    for site_data in load_sites():
+        telemetry = UnifiedTelemetry(**site_data)
+        sync_site_alerts(
+            telemetry.tenant_id,
+            telemetry.site_id,
+            run_fault_detection_ai(telemetry),
+            telemetry.timestamp,
+        )
 
 
 @app.get("/")
@@ -209,16 +224,25 @@ def run_carbon_intelligence(telemetry: UnifiedTelemetry, optimized_dispatch: dic
     }
 
 
-def record_telemetry(telemetry: UnifiedTelemetry) -> None:
+def record_telemetry(telemetry: UnifiedTelemetry, simulated: bool = False) -> None:
     payload = telemetry.model_dump(mode="json")
-    payload["data_source"] = "INGESTED"
+    payload["data_source"] = "SIMULATED" if simulated else "INGESTED"
     save_telemetry(payload)
-    # Evaluate and dispatch once per received sample, never as a side effect of dashboard reads.
-    run_fault_detection_ai(telemetry, dispatch_webhooks=True)
+    alerts = run_fault_detection_ai(telemetry)
+    newly_opened = set(sync_site_alerts(telemetry.tenant_id, telemetry.site_id, alerts, telemetry.timestamp))
+    for alert in alerts:
+        if alert["type"] in newly_opened:
+            dispatch_safety_alert_webhook(
+                alert["type"], alert["severity"], alert["message"], telemetry.site_id, telemetry.tenant_id
+            )
 
 
 @app.post("/api/v1/telemetry/huawei")
-def ingest_huawei(payload: dict, authorization: str | None = Header(default=None)):
+def ingest_huawei(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+    simulation_header: str | None = Header(default=None, alias="X-VumaGrid-Simulation"),
+):
     try:
         meta = payload["metadata"]
         regs = payload["registers"]
@@ -236,14 +260,18 @@ def ingest_huawei(payload: dict, authorization: str | None = Header(default=None
             current_tariff_kes=regs["active_tariff_kes"]
         )
         require_ingestion_tenant(normalized.tenant_id, authorization)
-        record_telemetry(normalized)
+        record_telemetry(normalized, simulated=DEMO_MODE and simulation_header == "true")
         return {"status": "success", "site": normalized.site_id}
     except (KeyError, TypeError, ValueError, ValidationError) as e:
         raise HTTPException(status_code=422, detail=f"Invalid or missing Huawei register value: {str(e)}")
 
 
 @app.post("/api/v1/telemetry/victron")
-def ingest_victron(payload: dict, authorization: str | None = Header(default=None)):
+def ingest_victron(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+    simulation_header: str | None = Header(default=None, alias="X-VumaGrid-Simulation"),
+):
     try:
         data = payload["victron_venus_payload"]
         normalized = UnifiedTelemetry(
@@ -260,14 +288,18 @@ def ingest_victron(payload: dict, authorization: str | None = Header(default=Non
             current_tariff_kes=data["kplc_cost_per_kwh"]
         )
         require_ingestion_tenant(normalized.tenant_id, authorization)
-        record_telemetry(normalized)
+        record_telemetry(normalized, simulated=DEMO_MODE and simulation_header == "true")
         return {"status": "success", "site": normalized.site_id}
     except (KeyError, TypeError, ValueError, ValidationError) as e:
         raise HTTPException(status_code=422, detail=f"Invalid or missing Victron value: {str(e)}")
 
 
 @app.post("/api/v1/telemetry/sungrow")
-def ingest_sungrow(payload: dict, authorization: str | None = Header(default=None)):
+def ingest_sungrow(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+    simulation_header: str | None = Header(default=None, alias="X-VumaGrid-Simulation"),
+):
     try:
         data = payload["sungrow_data"]
         normalized = UnifiedTelemetry(
@@ -284,7 +316,7 @@ def ingest_sungrow(payload: dict, authorization: str | None = Header(default=Non
             current_tariff_kes=data["billing_rate_kes"]
         )
         require_ingestion_tenant(normalized.tenant_id, authorization)
-        record_telemetry(normalized)
+        record_telemetry(normalized, simulated=DEMO_MODE and simulation_header == "true")
         return {"status": "success", "site": normalized.site_id}
     except (KeyError, TypeError, ValueError, ValidationError) as e:
         raise HTTPException(status_code=422, detail=f"Invalid or missing Sungrow value: {str(e)}")
@@ -302,6 +334,9 @@ def get_live_states(
     if tenant_id and tenant_id not in allowed_tenants:
         require_tenant_access(tenant_id, authorization)
     response_data = []
+    alerts_by_site: dict[tuple[str, str], list[dict]] = {}
+    for alert in load_active_alerts(allowed_tenants):
+        alerts_by_site.setdefault((alert["tenant_id"], alert["site_id"]), []).append(alert)
     energy_totals_by_tenant = load_energy_totals()
     for data in load_sites(asset_type=asset_type):
         if data["tenant_id"] not in allowed_tenants or (tenant_id and data["tenant_id"] != tenant_id):
@@ -325,7 +360,7 @@ def get_live_states(
         data_copy = data.copy()
         data_copy["energy_health_score"] = health_score
         data_copy["optimization"] = optimization_decision
-        data_copy["fault_alerts"] = fault_alerts
+        data_copy["fault_alerts"] = alerts_by_site.get((data["tenant_id"], data["site_id"]), fault_alerts)
         data_copy["carbon_intelligence"] = esg_metrics
         response_data.append(data_copy)
     return response_data
@@ -344,6 +379,22 @@ def get_tenants(authorization: str | None = Header(default=None)):
         tenant = tenants.setdefault(tenant_id, {"tenant_id": tenant_id, "site_count": 0})
         tenant["site_count"] += 1
     return sorted(tenants.values(), key=lambda tenant: tenant["tenant_id"])
+
+
+@app.get("/api/v1/alerts/active")
+def get_active_alerts(authorization: str | None = Header(default=None)):
+    return load_active_alerts(accessible_tenants(authorization))
+
+
+@app.post("/api/v1/alerts/{alert_id}/acknowledge")
+def acknowledge_active_alert(alert_id: int, authorization: str | None = Header(default=None)):
+    alert = load_alert(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+    require_tenant_access(alert["tenant_id"], authorization)
+    if alert["resolved_at"]:
+        raise HTTPException(status_code=409, detail="Resolved alerts cannot be acknowledged.")
+    return acknowledge_alert(alert_id)
 
 
 @app.get("/api/v1/sites/{site_id}/history")

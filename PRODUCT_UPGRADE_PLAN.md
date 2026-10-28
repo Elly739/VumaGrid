@@ -6,13 +6,13 @@ Build Vuma Grid into an operations platform for commercial and industrial energy
 
 ## Current baseline
 
-- The Next.js app is a single client-side dashboard with polling, investment simulation, and a hardware onboarding form.
-- The browser hard-codes `127.0.0.1:8013`, preventing a deployed frontend from reaching its configured backend.
-- The backend normalizes three vendor payloads, but live state, history, and carbon totals live in process memory. Restarts lose data and multiple workers disagree.
-- Tenant filtering is a query parameter, not an authorization boundary. The API allows every origin and has no identity or role model.
-- The onboarding form posts sample telemetry; it does not create durable tenant, site, device, credentials, or an integration record.
-- The investment simulator substitutes random data when history is insufficient and uses state of charge as a proxy for battery capacity. Outputs are not yet dependable forecasts.
-- The optimizer returns `primary_command`, while its fallback returns `action`; the frontend assumes the former exists.
+- The Next.js app has Overview, Sites, Alerts, and Performance workspaces, with five-second polling, site search, alert severity filters, and recent solar/load history.
+- The API origin is configurable through `NEXT_PUBLIC_VUMAGRID_API_URL`; the local default is `http://127.0.0.1:8013`.
+- The backend normalizes three vendor-shaped payloads and persists latest site state and telemetry history in SQLite. This is a single-node development store, not a multi-instance production database.
+- Production API reads and analytics are scoped by configured tenant bearer tokens; ingestion uses separate tenant-bound device tokens. This is not individual identity, role-based access, or token lifecycle management.
+- The bundled simulator emits synthetic vendor-shaped readings. It is not a calibrated plant model, does not drive the optimizer's dispatch back into battery state, and uses uncalibrated outage, load, and battery-health variation.
+- Investment analysis requires at least 24 hours and 288 samples and no longer substitutes random data when history is insufficient. It still applies measured state of charge independently to each sample rather than advancing a physical battery model, so results are experimental.
+- Dispatch output is a snapshot recommendation only. The API does not send commands to equipment; equipment limits, battery energy progression, approval, acknowledgement, and command audit are not implemented.
 
 ## Phased roadmap
 
@@ -69,4 +69,4 @@ Complete the first slice, then build one vertical workflow at a time: persistent
 ## Progress
 
 - Completed: configurable frontend and simulator API origins; shared frontend request errors and product metadata; SQLite storage for latest site state and telemetry history; opt-in demo seeding; configurable CORS origins and alert webhook; telemetry range validation; side-effect-free dashboard reads; ingestion-triggered fault notifications; carbon totals integrated from stored telemetry; API-backed tenant/site choices; removal of random investment fallback and upfront history coverage checks.
-- In progress: the investment scenario now weights power by sample duration and requires explicit battery capacity, but its battery state model is not yet suitable for financial decisions. The operations UI now has distinct Overview, Sites, Alerts, and Performance workspaces and a five-second live simulator heartbeat. Tenant-level bearer token checks scope operator reads/analytics/exports; separate device tokens bind ingestion to a tenant; configured alert webhooks route per tenant. Demo mode is loopback-only. Individual user identity, per-site roles inside a tenant, token lifecycle/auditing, database migrations, durable alert acknowledgement, and production device onboarding remain open.
+- In progress: the investment scenario now weights power by sample duration and requires explicit battery capacity, but its battery state model is not yet suitable for financial decisions. The operations UI has distinct Overview, Sites, Alerts, and Performance workspaces, authenticated report downloads, and a five-second simulator heartbeat. Tenant-level bearer token checks scope operator reads/analytics/exports; separate device tokens bind ingestion to a tenant. Alert history and acknowledgement timestamps persist per tenant, while individual user attribution, assignment, durable webhook retries, and production device onboarding remain open. Demo mode is loopback-only. Individual user identity, per-site roles, token lifecycle/auditing, and database migrations remain open.
