@@ -27,11 +27,12 @@ Current backend state is stored in a local SQLite database (`backend/vumagrid.db
 
 ## How the operator app works
 
-The app opens on **Overview**. The four workspace buttons on the left change the main content; these are separate workspaces, not scroll links. The selected workspace is reflected in the URL hash, so browser back/forward also moves between the recent workspaces.
+The app opens on **Overview**. The workspace buttons on the left change the main content; these are separate workspaces, not scroll links. The selected workspace is reflected in the URL hash, so browser back/forward also moves between the recent workspaces.
 
 | Workspace | What it is for | What you can do |
 |---|---|---|
 | **Overview** (`#overview`) | Decide where to look first across your assigned portfolios. | Review site-attention, alert, solar, and demand totals. Open a site that needs review, or jump to Sites, Alerts, and Performance. |
+| **Energy network** (`#network`) | Follow current power sources and loads at one selected site. | Compare solar, grid import, battery flow, demand, EV charging, and heat-pump loads. Inspect source/sink balance and the recent generation/demand trend. Simulator-derived end uses are labeled modeled; missing real submeters remain unavailable. |
 | **Sites** (`#sites`) | Inspect the operating state of each site in the selected portfolio. | Search sites, compare connection status, solar output, demand, battery state of charge and health, and telemetry freshness. Select a row to open that site's Performance view. |
 | **Alerts** (`#alerts`) | Review fault conditions reported by site telemetry. | Filter active conditions by severity, acknowledge them, and use **View site** to inspect the reporting site. Alert records persist and resolve when a later reading clears the condition; assignment and user-attributed audit are not implemented. |
 | **Performance** (`#performance`) | Understand how one site is operating over time. | Choose an authorized site, compare stored solar and demand samples, inspect current power and battery values, and review the newest readings. |
@@ -44,7 +45,7 @@ The **Portfolio** selector narrows the operator's view. In production mode, the 
 2. The corresponding `/api/v1/telemetry/...` endpoint validates and normalizes the payload. In local demo mode, simulator submissions are labeled `SIMULATED` in site state. Outside demo mode, the API ignores that label and checks that the device bearer token is allowed to write for the payload's tenant.
 3. `backend/app/storage.py` stores the latest site state and each reading in SQLite.
 4. The dashboard polls `/api/v1/dashboard/state` and `/api/v1/sites/{site_id}/history`. The API calculates a dispatch recommendation, health score, and threshold-based alerts from the latest site sample; carbon totals are integrated from stored readings.
-5. The browser displays those results within the operator token's tenant scope. The performance view requests up to 500 latest samples from the preceding 24 hours; at a five-second demo cadence this is roughly the latest 42 minutes. The optimizer does not send commands to an inverter, battery, or grid controller.
+5. The browser displays those results within the operator token's tenant scope. The Energy Network view exposes simulated or metered grid/battery flow, modeled or metered end-use breakdown, and a source/sink balance. The performance view requests up to 500 latest samples from the preceding 24 hours; at a five-second demo cadence this is roughly the latest 42 minutes. The optimizer does not send commands to an inverter, battery, or grid controller.
 
 ## How realistic is the simulator?
 
@@ -81,6 +82,7 @@ The order matters: make the simulated plant internally consistent first, validat
 │   │   ├── security.py   # Tenant-scoped operator and ingestion token checks
 │   │   └── storage.py    # SQLite latest-state and telemetry-history persistence
 │   ├── tests/
+│   │   ├── test_alert_storage.py # Persisted alert lifecycle tests
 │   │   ├── test_security.py   # Tenant authorization regression tests
 │   │   └── test_simulator.py  # Deterministic simulation and power-balance tests
 │   ├── simulator.py      # Synthetic five-second vendor-shaped telemetry sender
@@ -88,7 +90,7 @@ The order matters: make the simulated plant internally consistent first, validat
 │   └── .env.example      # Backend environment-variable reference
 ├── frontend/
 │   ├── src/app/
-│   │   ├── page.tsx      # Overview, Sites, Alerts and Performance workspaces
+│   │   ├── page.tsx      # Overview, Energy Network, Sites, Alerts and Performance workspaces
 │   │   ├── globals.css   # Shared visual system and responsive layout
 │   │   └── layout.tsx    # App shell and product metadata
 │   ├── src/lib/api.ts   # API origin, request errors and browser bearer token
@@ -116,6 +118,7 @@ The order matters: make the simulated plant internally consistent first, validat
                ▼
 [Next.js Operations UI]
        ├── Live portfolio overview
+       ├── Site-level energy network and load breakdown
        ├── Scoped site health and alert queue
        ├── Stored telemetry history view
        └── Tenant-scoped ESG PDF export

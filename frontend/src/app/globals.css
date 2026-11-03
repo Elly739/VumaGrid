@@ -123,3 +123,60 @@ tbody tr { cursor:pointer; transition:background .12s ease; } tbody tr:hover,tbo
 @media(max-width:900px) { .ops-shell { display:block; }.ops-sidebar { position:sticky; inset:0 0 auto; width:100%; height:auto; display:flex; flex-direction:row; align-items:center; gap:4px; overflow-x:auto; padding:7px 9px; }.ops-brand { flex:0 0 auto; padding:0 8px 0 2px; font-size:14px; }.ops-brand small,.brand-mark,.nav-label,.sidebar-bottom { display:none; }.nav-item { width:auto; flex:0 0 auto; gap:6px; margin:0; padding:9px 10px; font-size:10px; white-space:nowrap; }.nav-count { margin-left:1px; }.ops-main { width:100%; margin-left:0; }.ops-topbar { height:54px; padding:0 16px; }.mobile-brand { display:none; }.breadcrumbs { font-size:10px; }.top-actions { gap:10px; }.live-indicator { font-size:9px; white-space:nowrap; }.updated-label { font-size:9px; }.page-content { padding:22px 14px; }.page-heading { align-items:flex-start; flex-direction:column; }.page-heading h1 { font-size:22px; }.tenant-select { width:100%; }.metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }.metric-card { min-height:105px; padding:12px; }.metric-value { font-size:22px; }.site-toolbar { padding:9px; }.search-box { width:min(58%,220px); }.site-toolbar .updated-label { font-size:8px; }.panel-foot { flex-direction:column; }.ops-footer { flex-direction:column; gap:6px; }.table-scroll table { min-width:730px; }.performance-controls { align-items:stretch; flex-direction:column; }.performance-controls .tenant-select { max-width:none; } }
 @media(max-width:900px) { .access-card { align-items:stretch; flex-direction:column; }.access-card input { width:100%; }.access-card button { width:100%; } }
 @media(max-width:390px) { .top-actions .updated-label { display:none; }.metric-top { font-size:9px; }.metric-icon { width:24px; height:24px; } }
+
+.energy-network { display:flex; flex-direction:column; gap:12px; margin-bottom:16px; padding:16px; border:1px solid #1b2b3c; border-radius:10px; background:#07111d; color:#e7f0f7; box-shadow:0 12px 30px #13233420; }
+.network-heading { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:1px 2px 3px; }
+.network-heading h2 { margin:6px 0 4px; color:#f0f6fb; font-size:20px; font-weight:650; }
+.network-heading p { margin:0; color:#7f93a8; font-size:10px; }
+.network-eyebrow { display:flex; align-items:center; gap:7px; color:#64c7b1; font-size:8px; font-weight:700; letter-spacing:1px; }
+.network-eyebrow i,.network-live-tag i { width:6px; height:6px; border-radius:50%; background:#4bd4a8; box-shadow:0 0 9px #4bd4a880; }
+.network-site-select { min-width:220px; display:flex; flex-direction:column; gap:5px; color:#71869b; font-size:9px; }
+.network-site-select select { height:33px; padding:0 10px; border:1px solid #26394d; border-radius:5px; background:#0b1928; color:#d5e0e9; font-size:10px; }
+.network-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }
+.network-kpi { min-width:0; padding:11px 12px; border:1px solid #1a2c3d; border-radius:6px; background:#0b1928; }
+.network-kpi>span { display:block; color:#8295a8; font-size:9px; }
+.network-kpi>strong { display:block; margin:7px 0 6px; color:#eaf4fb; font-size:22px; font-weight:650; font-variant-numeric:tabular-nums; }
+.network-kpi>strong small { color:#96aabc; font-size:11px; font-weight:500; }
+.network-kpi>div { display:flex; align-items:center; gap:6px; color:#74899e; font-size:8px; }
+.network-kpi:nth-child(1) .lucide { color:#f3be5b; }.network-kpi:nth-child(2) .lucide { color:#69b9ff; }.network-kpi:nth-child(3) .lucide { color:#58d4a9; }.network-kpi:nth-child(4) .lucide { color:#df82d5; }
+.network-good { color:#62d5a9 !important; }.network-warn { color:#f0a75c !important; }
+.network-layout { display:grid; grid-template-columns:minmax(0,1.8fr) minmax(255px,.75fr); gap:10px; align-items:stretch; }
+.network-panel { min-width:0; overflow:hidden; border:1px solid #1b2c3c; border-radius:7px; background:#0a1725; }
+.network-panel-heading { min-height:58px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px; border-bottom:1px solid #17283a; }
+.network-panel-heading h3 { margin:0 0 4px; color:#e2ebf2; font-size:11px; font-weight:650; }
+.network-panel-heading p { margin:0; color:#72879b; font-size:8px; }
+.network-live-tag,.network-count { display:flex; align-items:center; gap:6px; color:#7c94a7; font-size:8px; white-space:nowrap; }
+.network-live-tag i { width:5px; height:5px; }
+.network-count { padding:4px 7px; border:1px solid #21354a; border-radius:4px; }
+.network-stage { position:relative; height:460px; overflow:hidden; background:radial-gradient(ellipse at 50% 46%,#142a35 0%,#091722 48%,#07111b 100%); }
+.energy-scene { position:absolute; inset:0; z-index:0; cursor:grab; touch-action:pan-y; }
+.energy-scene:active { cursor:grabbing; }
+.energy-scene canvas { display:block; width:100%; height:100%; }
+.scene-wash { position:absolute; z-index:1; inset:0; pointer-events:none; background:linear-gradient(180deg,#07111b1a 0%,transparent 42%,#07111b45 100%); }
+.network-node { position:absolute; z-index:2; width:clamp(116px,17%,150px); min-height:75px; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:7px 8px; transform:translate(-50%,-50%); border:1px solid #65808b70; border-radius:5px; background:#071622bd; box-shadow:0 8px 26px #0007; backdrop-filter:blur(7px); text-align:center; }
+.node-grid { left:50%; top:12%; }.node-battery { left:15%; top:39%; }.node-solar { left:85%; top:39%; }.node-facility { left:50%; top:71%; width:clamp(142px,20%,172px); min-height:78px; border-color:#5ac8a475; background:#0c2526d9; }.node-ev { left:27%; top:88%; }.node-heat { left:73%; top:88%; }
+.node-icon { display:grid; place-items:center; width:26px; height:26px; margin-bottom:4px; color:#71cfc0; }
+.node-grid .node-icon { color:#61b9f4; }.node-battery .node-icon { color:#58d4a9; }.node-solar .node-icon { color:#f2bd57; }.node-ev .node-icon,.node-heat .node-icon { color:#bb8bdc; }.node-facility .node-icon { color:#78dfc1; }
+.node-label { color:#8ca2b5; font-size:7px; font-weight:700; letter-spacing:.8px; }
+.network-node strong { margin:2px 0; color:#eaf4fa; font-size:12px; font-weight:650; font-variant-numeric:tabular-nums; }
+.network-node small { color:#a0b1bd; font-size:7px; }
+.node-offline { border-color:#805643; }.node-offline .node-icon,.node-offline strong { color:#eea06e; }
+.battery-track { width:66%; height:3px; margin-top:7px; overflow:hidden; border-radius:3px; background:#20364a; }
+.battery-track i { display:block; height:100%; border-radius:3px; background:#58d4a9; }
+.network-panel-foot { display:flex; justify-content:space-between; gap:10px; padding:9px 13px; border-top:1px solid #17283a; color:#6f8498; font-size:7px; }
+.network-breakdown { display:flex; flex-direction:column; }
+.load-breakdown-list { display:flex; flex-direction:column; gap:19px; padding:16px 14px; }
+.load-breakdown-row { display:flex; flex-direction:column; gap:7px; }
+.load-row-top { display:flex; align-items:center; justify-content:space-between; gap:8px; color:#afbecc; font-size:8px; }
+.load-row-top span { display:flex; align-items:center; gap:7px; }.load-row-top svg { color:#b887d6; }.load-row-top b { color:#e1ebf3; font-weight:600; font-variant-numeric:tabular-nums; }
+.load-meter { height:4px; overflow:hidden; border-radius:4px; background:#1b2c3c; }.load-meter i { display:block; height:100%; border-radius:4px; background:linear-gradient(90deg,#4cba9d,#61aee8); }
+.load-breakdown-row small { color:#6e8295; font-size:7px; }
+.network-balance { margin:auto 13px 13px; padding:10px; border:1px solid #1b3042; border-radius:5px; background:#0d1d2c; }
+.network-balance>span { color:#91a5b7; font-size:8px; }.network-balance>div { margin-top:7px; color:#e3edf4; font-size:14px; font-variant-numeric:tabular-nums; }.network-balance>div span { color:#60768a; }.network-balance small { display:block; margin-top:4px; color:#71869a; font-size:7px; }
+.network-unserved { display:flex; align-items:center; gap:6px; margin:0 13px 13px; padding:8px; border:1px solid #694936; border-radius:5px; color:#f1ad6f; font-size:8px; }
+.network-history { padding-bottom:8px; }
+.network-chart-legend { display:flex; gap:14px; padding:10px 15px 0; color:#8ca1b4; font-size:8px; }.network-chart-legend span { display:flex; align-items:center; gap:5px; }.network-chart-legend i { width:7px; height:7px; border-radius:50%; }.network-chart-grid { fill:none; stroke:#1b2c3d; stroke-width:1; }.network-trend { display:block; width:100%; height:135px; padding:4px 15px; }.network-chart-line { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; }.network-chart-line.solar-line { stroke:#e9bb58; }.network-chart-line.load-line { stroke:#58b7e9; }.network-chart-area { fill:#e9bb58; opacity:.07; }.network-axis { display:flex; justify-content:space-between; padding:0 15px; color:#63798e; font-size:7px; }
+.network-empty { min-height:260px; display:grid; place-items:center; color:#7b91a5; font-size:10px; }.network-empty.compact { min-height:90px; }
+@media(max-width:1120px) { .network-layout { grid-template-columns:1fr; }.network-breakdown { min-height:0; }.load-breakdown-list { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }.network-balance { margin-top:0; } }
+@media(max-width:700px) { .energy-network { padding:10px; }.network-heading { align-items:flex-start; flex-direction:column; }.network-site-select { width:100%; }.network-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }.network-kpi>strong { font-size:18px; }.network-stage { height:520px; }.node-grid { top:10%; }.node-battery { left:20%; top:32%; }.node-solar { left:80%; top:32%; }.node-facility { top:58%; }.node-ev { left:27%; top:87%; }.node-heat { left:73%; top:87%; }.network-node { width:clamp(106px,31%,128px); min-height:67px; padding:6px; }.node-facility { width:clamp(132px,40%,152px); }.node-icon { width:22px; height:22px; margin-bottom:2px; }.network-node strong { font-size:11px; }.network-panel-foot { flex-direction:column; }.load-breakdown-list { grid-template-columns:1fr; gap:14px; } }
+@media(max-width:390px) { .network-stage { height:490px; }.network-node { width:104px; min-height:64px; }.node-facility { width:132px; }.node-battery { left:18%; }.node-solar { left:82%; }.node-ev { left:27%; }.node-heat { left:73%; } }

@@ -16,6 +16,16 @@ class UnifiedTelemetry(BaseModel):
     battery_soh_pct: float = Field(ge=0, le=100)
     grid_online: bool
     current_tariff_kes: float = Field(ge=0)
+    grid_import_kw: float = Field(default=0.0, ge=0)
+    battery_charge_kw: float = Field(default=0.0, ge=0)
+    battery_discharge_kw: float = Field(default=0.0, ge=0)
+    solar_curtailed_kw: float = Field(default=0.0, ge=0)
+    unserved_load_kw: float = Field(default=0.0, ge=0)
+    ev_charger_kw: float = Field(default=0.0, ge=0)
+    heat_pump_kw: float = Field(default=0.0, ge=0)
+    other_load_kw: float = Field(default=0.0, ge=0)
+    power_flow_source: str = Field(default="unavailable", max_length=24)
+    load_breakdown_source: str = Field(default="unavailable", max_length=24)
 
     def calculate_health_penalty(self) -> float:
         penalty = 0.0

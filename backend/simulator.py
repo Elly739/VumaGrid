@@ -146,6 +146,17 @@ class TelemetrySimulator:
         load_target = self.random.uniform(0.985, 1.015)
         state["load_factor"] = 0.9 * state["load_factor"] + 0.1 * load_target
         load = site["base_load_kw"] * self._load_shape(site["load_profile"], hour) * state["load_factor"]
+        evening_charge_window = max(0.0, math.sin(math.pi * (hour - 15) / 10))
+        if site["load_profile"] == "hospital":
+            ev_charger_kw = load * (0.025 + 0.025 * evening_charge_window)
+            heat_pump_kw = load * (0.09 + 0.02 * daylight)
+        elif site["load_profile"] == "industrial":
+            ev_charger_kw = load * (0.035 + 0.045 * evening_charge_window)
+            heat_pump_kw = load * 0.025
+        else:
+            ev_charger_kw = load * (0.01 + 0.015 * evening_charge_window)
+            heat_pump_kw = load * (0.025 + 0.01 * daylight)
+        other_load_kw = load - ev_charger_kw - heat_pump_kw
         grid_online = self._grid_is_online(site, state)
         tariff = get_kplc_tariff(local_time.hour)
         capacity = site["bess_capacity_kwh"]
@@ -192,6 +203,9 @@ class TelemetrySimulator:
             "curtailed_solar_kw": curtailed_solar_kw,
             "unserved_load_kw": unserved_load_kw,
             "grid_online": grid_online,
+            "ev_charger_kw": ev_charger_kw,
+            "heat_pump_kw": heat_pump_kw,
+            "other_load_kw": other_load_kw,
         }
 
         if site["brand"] == "HUAWEI_SUN2000":
@@ -206,6 +220,16 @@ class TelemetrySimulator:
                     "battery_health_soh": site["initial_soh_pct"],
                     "grid_voltage_status": 1 if grid_online else 0,
                     "active_tariff_kes": tariff,
+                    "grid_import_kw": round(grid_draw_kw, 1),
+                    "battery_charge_kw": round(charge_kw, 1),
+                    "battery_discharge_kw": round(discharge_kw, 1),
+                    "solar_curtailed_kw": round(curtailed_solar_kw, 1),
+                    "unserved_load_kw": round(unserved_load_kw, 1),
+                    "ev_charger_kw": round(ev_charger_kw, 1),
+                    "heat_pump_kw": round(heat_pump_kw, 1),
+                    "other_load_kw": round(other_load_kw, 1),
+                    "power_flow_source": "modeled",
+                    "load_breakdown_source": "modeled",
                 },
             }
 
@@ -222,6 +246,16 @@ class TelemetrySimulator:
                     "battery_health_pct": site["initial_soh_pct"],
                     "grid_state": "connected" if grid_online else "alarm_active",
                     "kplc_cost_per_kwh": tariff,
+                    "grid_import_kw": round(grid_draw_kw, 1),
+                    "battery_charge_kw": round(charge_kw, 1),
+                    "battery_discharge_kw": round(discharge_kw, 1),
+                    "solar_curtailed_kw": round(curtailed_solar_kw, 1),
+                    "unserved_load_kw": round(unserved_load_kw, 1),
+                    "ev_charger_kw": round(ev_charger_kw, 1),
+                    "heat_pump_kw": round(heat_pump_kw, 1),
+                    "other_load_kw": round(other_load_kw, 1),
+                    "power_flow_source": "modeled",
+                    "load_breakdown_source": "modeled",
                 }
             }
 
@@ -237,6 +271,16 @@ class TelemetrySimulator:
                 "state_of_health": site["initial_soh_pct"],
                 "grid_relay_closed": grid_online,
                 "billing_rate_kes": tariff,
+                "grid_import_kw": round(grid_draw_kw, 1),
+                "battery_charge_kw": round(charge_kw, 1),
+                "battery_discharge_kw": round(discharge_kw, 1),
+                "solar_curtailed_kw": round(curtailed_solar_kw, 1),
+                "unserved_load_kw": round(unserved_load_kw, 1),
+                "ev_charger_kw": round(ev_charger_kw, 1),
+                "heat_pump_kw": round(heat_pump_kw, 1),
+                "other_load_kw": round(other_load_kw, 1),
+                "power_flow_source": "modeled",
+                "load_breakdown_source": "modeled",
             }
         }
 

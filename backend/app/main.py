@@ -227,6 +227,9 @@ def run_carbon_intelligence(telemetry: UnifiedTelemetry, optimized_dispatch: dic
 def record_telemetry(telemetry: UnifiedTelemetry, simulated: bool = False) -> None:
     payload = telemetry.model_dump(mode="json")
     payload["data_source"] = "SIMULATED" if simulated else "INGESTED"
+    if simulated:
+        payload["power_flow_source"] = "simulated"
+        payload["load_breakdown_source"] = "modeled"
     save_telemetry(payload)
     alerts = run_fault_detection_ai(telemetry)
     newly_opened = set(sync_site_alerts(telemetry.tenant_id, telemetry.site_id, alerts, telemetry.timestamp))
@@ -257,7 +260,17 @@ def ingest_huawei(
             battery_soc_pct=regs["bess_state_of_charge_pct"],
             battery_soh_pct=regs["battery_health_soh"],
             grid_online=True if regs["grid_voltage_status"] == 1 else False,
-            current_tariff_kes=regs["active_tariff_kes"]
+            current_tariff_kes=regs["active_tariff_kes"],
+            grid_import_kw=regs.get("grid_import_kw", 0.0),
+            battery_charge_kw=regs.get("battery_charge_kw", 0.0),
+            battery_discharge_kw=regs.get("battery_discharge_kw", 0.0),
+            solar_curtailed_kw=regs.get("solar_curtailed_kw", 0.0),
+            unserved_load_kw=regs.get("unserved_load_kw", 0.0),
+            ev_charger_kw=regs.get("ev_charger_kw", 0.0),
+            heat_pump_kw=regs.get("heat_pump_kw", 0.0),
+            other_load_kw=regs.get("other_load_kw", 0.0),
+            power_flow_source=regs.get("power_flow_source", "metered" if all(key in regs for key in ("grid_import_kw", "battery_charge_kw", "battery_discharge_kw")) else "unavailable"),
+            load_breakdown_source=regs.get("load_breakdown_source", "metered" if all(key in regs for key in ("ev_charger_kw", "heat_pump_kw", "other_load_kw")) else "unavailable"),
         )
         require_ingestion_tenant(normalized.tenant_id, authorization)
         record_telemetry(normalized, simulated=DEMO_MODE and simulation_header == "true")
@@ -285,7 +298,17 @@ def ingest_victron(
             battery_soc_pct=data["soc_percentage"],
             battery_soh_pct=data["battery_health_pct"],
             grid_online=True if data["grid_state"] == "connected" else False,
-            current_tariff_kes=data["kplc_cost_per_kwh"]
+            current_tariff_kes=data["kplc_cost_per_kwh"],
+            grid_import_kw=data.get("grid_import_kw", 0.0),
+            battery_charge_kw=data.get("battery_charge_kw", 0.0),
+            battery_discharge_kw=data.get("battery_discharge_kw", 0.0),
+            solar_curtailed_kw=data.get("solar_curtailed_kw", 0.0),
+            unserved_load_kw=data.get("unserved_load_kw", 0.0),
+            ev_charger_kw=data.get("ev_charger_kw", 0.0),
+            heat_pump_kw=data.get("heat_pump_kw", 0.0),
+            other_load_kw=data.get("other_load_kw", 0.0),
+            power_flow_source=data.get("power_flow_source", "metered" if all(key in data for key in ("grid_import_kw", "battery_charge_kw", "battery_discharge_kw")) else "unavailable"),
+            load_breakdown_source=data.get("load_breakdown_source", "metered" if all(key in data for key in ("ev_charger_kw", "heat_pump_kw", "other_load_kw")) else "unavailable"),
         )
         require_ingestion_tenant(normalized.tenant_id, authorization)
         record_telemetry(normalized, simulated=DEMO_MODE and simulation_header == "true")
@@ -313,7 +336,17 @@ def ingest_sungrow(
             battery_soc_pct=data["bess_cap_left_pct"],
             battery_soh_pct=data["state_of_health"],
             grid_online=data["grid_relay_closed"],
-            current_tariff_kes=data["billing_rate_kes"]
+            current_tariff_kes=data["billing_rate_kes"],
+            grid_import_kw=data.get("grid_import_kw", 0.0),
+            battery_charge_kw=data.get("battery_charge_kw", 0.0),
+            battery_discharge_kw=data.get("battery_discharge_kw", 0.0),
+            solar_curtailed_kw=data.get("solar_curtailed_kw", 0.0),
+            unserved_load_kw=data.get("unserved_load_kw", 0.0),
+            ev_charger_kw=data.get("ev_charger_kw", 0.0),
+            heat_pump_kw=data.get("heat_pump_kw", 0.0),
+            other_load_kw=data.get("other_load_kw", 0.0),
+            power_flow_source=data.get("power_flow_source", "metered" if all(key in data for key in ("grid_import_kw", "battery_charge_kw", "battery_discharge_kw")) else "unavailable"),
+            load_breakdown_source=data.get("load_breakdown_source", "metered" if all(key in data for key in ("ev_charger_kw", "heat_pump_kw", "other_load_kw")) else "unavailable"),
         )
         require_ingestion_tenant(normalized.tenant_id, authorization)
         record_telemetry(normalized, simulated=DEMO_MODE and simulation_header == "true")
@@ -362,6 +395,25 @@ def get_live_states(
         data_copy["optimization"] = optimization_decision
         data_copy["fault_alerts"] = alerts_by_site.get((data["tenant_id"], data["site_id"]), fault_alerts)
         data_copy["carbon_intelligence"] = esg_metrics
+        data_copy.update({
+            "grid_import_kw": telemetry_obj.grid_import_kw,
+            "battery_charge_kw": telemetry_obj.battery_charge_kw,
+            "battery_discharge_kw": telemetry_obj.battery_discharge_kw,
+            "solar_curtailed_kw": telemetry_obj.solar_curtailed_kw,
+            "unserved_load_kw": telemetry_obj.unserved_load_kw,
+            "ev_charger_kw": telemetry_obj.ev_charger_kw,
+            "heat_pump_kw": telemetry_obj.heat_pump_kw,
+            "other_load_kw": telemetry_obj.other_load_kw,
+        })
+        data_copy["power_flow_basis"] = {
+            "simulated": "simulated plant model",
+            "modeled": "simulated plant model",
+            "metered": "site power meters",
+        }.get(telemetry_obj.power_flow_source, "dispatch snapshot; flow meters unavailable")
+        data_copy["load_breakdown_basis"] = {
+            "modeled": "modeled demo end uses",
+            "metered": "submeter readings",
+        }.get(telemetry_obj.load_breakdown_source, "submeter data unavailable")
         response_data.append(data_copy)
     return response_data
 

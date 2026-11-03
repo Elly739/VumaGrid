@@ -1,27 +1,35 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, Battery, CheckCircle2, ChevronRight, CircleHelp, Clock3, Leaf, MapPin, RefreshCw, Search, Sun, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Battery, Building2, CheckCircle2, ChevronRight, CircleHelp, Clock3, Leaf, MapPin, Network, PlugZap, RefreshCw, Search, Sun, ThermometerSun, Zap } from "lucide-react";
 import { apiRequest, downloadFile, setAccessToken } from "@/lib/api";
+import EnergyNetworkScene from "@/components/EnergyNetworkScene";
 
-type View = "overview" | "sites" | "alerts" | "performance";
+type View = "overview" | "network" | "sites" | "alerts" | "performance";
 type Alert = { id: number; severity: string; type: string; message: string; acknowledged_at?: string | null };
 type Site = {
-  tenant_id: string; site_id: string; site_name?: string; data_source?: string; brand: string;
+  tenant_id: string; site_id: string; site_name?: string; data_source?: string; asset_type: string; brand: string;
   timestamp?: string; solar_generation_kw: number; facility_load_kw: number; battery_soc_pct: number;
   battery_soh_pct: number; grid_online: boolean; current_tariff_kes: number; energy_health_score: number;
-  optimization?: { primary_command: string; dispatch_log?: { grid_draw_kw: number; battery_discharge_kw: number } };
+  optimization?: { primary_command: string; dispatch_log?: { grid_draw_kw: number; battery_discharge_kw: number; battery_charge_kw?: number } };
   fault_alerts?: Alert[];
+  grid_import_kw?: number; battery_charge_kw?: number; battery_discharge_kw?: number;
+  solar_curtailed_kw?: number; unserved_load_kw?: number; ev_charger_kw?: number;
+  heat_pump_kw?: number; other_load_kw?: number;
+  power_flow_source?: string; load_breakdown_source?: string;
+  power_flow_basis?: string; load_breakdown_basis?: string;
 };
 type Sample = { timestamp: string; solar_generation_kw: number; facility_load_kw: number };
 
 const views: Record<View, { title: string; description: string }> = {
   overview: { title: "Overview", description: "A quick read on your portfolio. Start here to see what needs attention." },
+  network: { title: "Energy network", description: "Follow power from grid, solar, and storage into site loads." },
   sites: { title: "Sites", description: "Inspect live operating conditions for each site you are authorized to access." },
   alerts: { title: "Alerts", description: "Review fault conditions reported by telemetry from your sites." },
   performance: { title: "Performance", description: "Compare recent solar generation and facility demand for one site." },
 };
 function number(value: number) { return new Intl.NumberFormat("en-KE", { maximumFractionDigits: 0 }).format(value || 0); }
+function power(value: number) { return new Intl.NumberFormat("en-KE", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value || 0); }
 function secondsAgo(value?: string, now = Date.now()) {
   if (!value) return "No telemetry received";
   const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000));
@@ -69,7 +77,7 @@ export default function OperationsDashboard() {
   }, [tenant]);
 
   useEffect(() => {
-    const knownViews: View[] = ["overview", "sites", "alerts", "performance"];
+    const knownViews: View[] = ["overview", "network", "sites", "alerts", "performance"];
     const syncView = () => {
       const route = window.location.hash.replace("#", "") as View;
       if (knownViews.includes(route)) setView(route);
@@ -153,6 +161,28 @@ export default function OperationsDashboard() {
     const y = 146 - ((row[key] || 0) / maxPower) * 120;
     return (i ? "L" : "M") + x + " " + y;
   }).join(" ");
+  const isFlowSnapshot = active?.power_flow_basis === "dispatch snapshot; flow meters unavailable";
+  const networkFlow = {
+    solar: active?.solar_generation_kw || 0,
+    grid: isFlowSnapshot ? active?.optimization?.dispatch_log?.grid_draw_kw || 0 : active?.grid_import_kw || 0,
+    batteryCharge: isFlowSnapshot ? active?.optimization?.dispatch_log?.battery_charge_kw || 0 : active?.battery_charge_kw || 0,
+    batteryDischarge: isFlowSnapshot ? active?.optimization?.dispatch_log?.battery_discharge_kw || 0 : active?.battery_discharge_kw || 0,
+    curtailed: active?.solar_curtailed_kw || 0,
+    unserved: active?.unserved_load_kw || 0,
+    ev: active?.ev_charger_kw || 0,
+    heatPump: active?.heat_pump_kw || 0,
+    other: active?.other_load_kw || 0,
+    demand: active?.facility_load_kw || 0,
+  };
+  const networkLoads = [
+    { label: "EV charging", value: networkFlow.ev, icon: <PlugZap size={15}/> },
+    { label: "Heat pump", value: networkFlow.heatPump, icon: <ThermometerSun size={15}/> },
+    { label: "Other site loads", value: active?.load_breakdown_source === "unavailable" ? 0 : networkFlow.other, icon: <Building2 size={15}/> },
+  ];
+  const networkLoadTotal = networkLoads.reduce((sum, load) => sum + load.value, 0);
+  const networkSourceTotal = networkFlow.solar + networkFlow.grid + networkFlow.batteryDischarge;
+  const networkSinkTotal = networkFlow.demand - networkFlow.unserved + networkFlow.batteryCharge + networkFlow.curtailed;
+  const networkBalanceDelta = networkSourceTotal - networkSinkTotal;
 
   const exportReport = async () => {
     try {
@@ -217,11 +247,63 @@ export default function OperationsDashboard() {
     <section className="panel recent-readings"><div className="panel-heading"><div><h2>Recent readings</h2><p>Latest samples received by the backend</p></div></div><div className="table-scroll"><table><thead><tr><th>TIME</th><th>SOLAR</th><th>FACILITY DEMAND</th><th>DIFFERENCE</th></tr></thead><tbody>{samples.slice(-8).reverse().map((sample,index) => <tr key={sample.timestamp + index}><td>{new Date(sample.timestamp).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})}</td><td>{number(sample.solar_generation_kw)} kW</td><td>{number(sample.facility_load_kw)} kW</td><td>{number(sample.solar_generation_kw - sample.facility_load_kw)} kW</td></tr>)}</tbody></table></div></section>
   </section>;
 
+  const energyNetwork = <section className="energy-network">
+    <header className="network-heading">
+      <div><span className="network-eyebrow"><i/> LIVE MICROGRID MODEL</span><h2>{active?.site_name || active?.site_id || "No site selected"}</h2><p>{active?.site_id || "Choose a site with telemetry"} · {active?.power_flow_basis || "Waiting for power-flow telemetry"}</p></div>
+      <label className="network-site-select"><span>Site</span><select value={active?.site_id || ""} onChange={(event) => setSelected(event.target.value)}>{sites.map((site) => <option key={site.site_id} value={site.site_id}>{site.site_name || site.site_id}</option>)}</select></label>
+    </header>
+
+    <div className="network-kpis">
+      <article className="network-kpi"><span>Solar generation</span><strong>{number(networkFlow.solar)} <small>kW</small></strong><div><Sun size={14}/> PV inverter output</div></article>
+      <article className="network-kpi"><span>Grid import</span><strong>{number(networkFlow.grid)} <small>kW</small></strong><div className={active?.grid_online ? "network-good" : "network-warn"}><Zap size={14}/>{active?.grid_online ? "Grid connected" : "Islanded operation"}</div></article>
+      <article className="network-kpi"><span>Battery state</span><strong>{Math.round(active?.battery_soc_pct || 0)}<small>%</small></strong><div><Battery size={14}/>{networkFlow.batteryDischarge > 0 ? `${number(networkFlow.batteryDischarge)} kW discharging` : networkFlow.batteryCharge > 0 ? `${number(networkFlow.batteryCharge)} kW charging` : "Standby"}</div></article>
+      <article className="network-kpi"><span>Site demand</span><strong>{number(networkFlow.demand)} <small>kW</small></strong><div className={networkFlow.unserved > 0 ? "network-warn" : "network-good"}><Building2 size={14}/>{networkFlow.unserved > 0 ? `${number(networkFlow.unserved)} kW unserved` : "Load supplied"}</div></article>
+    </div>
+
+    <div className="network-layout">
+      <section className="network-panel network-flow-panel">
+        <div className="network-panel-heading"><div><h3>Power flow</h3><p>Current site balance · updates with telemetry</p></div><span className="network-live-tag"><i/> {active ? secondsAgo(active.timestamp, now) : "No feed"}</span></div>
+        {active ? <div className="network-stage" role="group" aria-label={`Energy network for ${active.site_name || active.site_id}`}>
+          <EnergyNetworkScene
+            solarKw={networkFlow.solar}
+            gridKw={networkFlow.grid}
+            batteryChargeKw={networkFlow.batteryCharge}
+            batteryDischargeKw={networkFlow.batteryDischarge}
+            evKw={networkLoads[0].value}
+            heatPumpKw={networkLoads[1].value}
+            gridOnline={active.grid_online}
+          />
+          <div className="scene-wash" aria-hidden="true"/>
+          <div className={`network-node node-grid ${active.grid_online ? "node-online" : "node-offline"}`}><span className="node-icon"><Zap size={20}/></span><span className="node-label">UTILITY GRID</span><strong>{active.grid_online ? `${number(networkFlow.grid)} kW` : "OFFLINE"}</strong><small>{active.grid_online ? "Import meter" : "Island mode"}</small></div>
+          <div className="network-node node-battery"><span className="node-icon"><Battery size={20}/></span><span className="node-label">BESS</span><strong>{number(networkFlow.batteryDischarge || networkFlow.batteryCharge)} kW</strong><small>{Math.round(active.battery_soc_pct)}% state of charge</small><div className="battery-track"><i style={{ width: `${Math.min(100, Math.max(0, active.battery_soc_pct))}%` }}/></div></div>
+          <div className="network-node node-solar"><span className="node-icon"><Sun size={20}/></span><span className="node-label">PV INVERTER</span><strong>{number(networkFlow.solar)} kW</strong><small>{number(networkFlow.curtailed)} kW curtailed</small></div>
+          <div className="network-node node-facility"><span className="node-icon"><Building2 size={22}/></span><span className="node-label">SITE BUS</span><strong>{number(networkFlow.demand)} kW</strong><small>{active.asset_type} · {active.brand}</small></div>
+          <div className="network-node node-ev"><span className="node-icon"><PlugZap size={18}/></span><span className="node-label">EV CHARGING</span><strong>{number(networkLoads[0].value)} kW</strong><small>{networkLoads[0].value > 0 ? "Active demand" : "Idle / not metered"}</small></div>
+          <div className="network-node node-heat"><span className="node-icon"><ThermometerSun size={18}/></span><span className="node-label">HEAT PUMP</span><strong>{number(networkLoads[1].value)} kW</strong><small>{networkLoads[1].value > 0 ? "Active demand" : "Idle / not metered"}</small></div>
+        </div> : <div className="network-empty">Waiting for a site telemetry reading.</div>}
+        <div className="network-panel-foot"><span>Flows are measurements or a labeled dispatch snapshot, not control commands.</span><span>{active?.load_breakdown_basis || "End-use data unavailable"}</span></div>
+      </section>
+
+      <aside className="network-panel network-breakdown">
+        <div className="network-panel-heading"><div><h3>Load breakdown</h3><p>Latest demand by end use</p></div><span className="network-count">{networkLoads.filter((load) => load.value > 0).length} active</span></div>
+        <div className="load-breakdown-list">{networkLoads.map((load) => <div className="load-breakdown-row" key={load.label}><div className="load-row-top"><span>{load.icon}{load.label}</span><b>{number(load.value)} kW</b></div><div className="load-meter"><i style={{ width: `${networkLoadTotal ? Math.min(100, (load.value / networkLoadTotal) * 100) : 0}%` }}/></div><small>{networkLoadTotal ? `${Math.round((load.value / networkLoadTotal) * 100)}% of current load` : "No submeter reading"}</small></div>)}</div>
+        <div className="network-balance"><span>Supply / demand</span><div><b>{power(networkSourceTotal)}</b><span> / </span><b>{power(networkSinkTotal)}</b><small>{Math.abs(networkBalanceDelta) <= 0.2 ? "Balanced within telemetry precision" : `${power(Math.abs(networkBalanceDelta))} kW balance delta`} · source / sink</small></div></div>
+        {networkFlow.unserved > 0 && <div className="network-unserved"><AlertTriangle size={15}/> {number(networkFlow.unserved)} kW of demand is not supplied</div>}
+      </aside>
+    </div>
+
+    <section className="network-panel network-history">
+      <div className="network-panel-heading"><div><h3>Generation and demand trend</h3><p>{active?.site_name || "Selected site"} · stored telemetry</p></div><span className="network-count">{samples.length} points</span></div>
+      {samples.length > 1 ? <><div className="network-chart-legend"><span><i className="legend-solar"/>Solar</span><span><i className="legend-load"/>Facility demand</span></div><svg className="network-trend" viewBox="0 0 600 160" preserveAspectRatio="none" role="img" aria-label="Recent solar generation and demand"><path className="network-chart-grid" d="M0 25H600 M0 65H600 M0 105H600 M0 145H600"/><path className="network-chart-area" d={chartPoints("solar_generation_kw") + " L600 150 L0 150 Z"}/><path className="network-chart-line solar-line" d={chartPoints("solar_generation_kw")}/><path className="network-chart-line load-line" d={chartPoints("facility_load_kw")}/></svg><div className="network-axis"><span>Oldest sample</span><span>Latest sample</span></div></> : <div className="network-empty compact">Start the simulator to build a live trend.</div>}
+    </section>
+  </section>;
+
   return <main className="ops-shell">
     <aside className="ops-sidebar">
       <button className="ops-brand" onClick={() => navigate("overview")}><span className="brand-mark"><Activity size={19}/></span><span>vuma<span className="brand-light">grid</span><small>ENERGY OPERATIONS</small></span></button>
       <div className="nav-label">WORKSPACE</div>
       <button className={"nav-item " + (view === "overview" ? "active" : "")} onClick={() => navigate("overview")}><Activity size={17}/>Overview</button>
+      <button className={"nav-item " + (view === "network" ? "active" : "")} onClick={() => navigate("network")}><Network size={17}/>Energy network</button>
       <button className={"nav-item " + (view === "sites" ? "active" : "")} onClick={() => navigate("sites")}><MapPin size={17}/>Sites <span className="nav-count">{sites.length}</span></button>
       <button className={"nav-item " + (view === "alerts" ? "active" : "")} onClick={() => navigate("alerts")}><AlertTriangle size={17}/>Alerts <span className="nav-count alert-count">{alerts.length}</span></button>
       <div className="nav-label nav-spaced">TOOLS</div>
@@ -258,12 +340,14 @@ export default function OperationsDashboard() {
             </div>
             <div className="panel overview-guide"><div className="panel-heading"><div><h2>Where do you want to go?</h2><p>Each workspace answers a different operations question</p></div></div>
               <button className="guide-row" onClick={() => navigate("sites")}><span className="guide-icon"><MapPin size={17}/></span><span><b>Sites</b><small>See live power, battery, and connection status.</small></span><ChevronRight size={15}/></button>
+              <button className="guide-row" onClick={() => navigate("network")}><span className="guide-icon performance-guide"><Network size={17}/></span><span><b>Energy network</b><small>Follow grid, solar, storage, and site loads.</small></span><ChevronRight size={15}/></button>
               <button className="guide-row" onClick={() => navigate("alerts")}><span className="guide-icon alert-guide"><AlertTriangle size={17}/></span><span><b>Alerts</b><small>Review reported faults and which site sent them.</small></span><ChevronRight size={15}/></button>
               <button className="guide-row" onClick={() => navigate("performance")}><span className="guide-icon performance-guide"><Activity size={17}/></span><span><b>Performance</b><small>See how solar output and site demand change.</small></span><ChevronRight size={15}/></button>
             </div>
           </section>
         </>}
 
+        {view === "network" && energyNetwork}
         {view === "sites" && siteTable}
         {view === "alerts" && alertList}
         {view === "performance" && performance}

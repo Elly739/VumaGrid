@@ -53,8 +53,9 @@ class TelemetrySimulatorTests(unittest.TestCase):
         simulator = TelemetrySimulator(seed=2, profiles=copy.deepcopy(SITES))
         timestamp = datetime(2026, 6, 1, 9, tzinfo=timezone.utc)
         expected_keys = ("metadata", "victron_venus_payload", "sungrow_data")
+        load_keys = ("total_current_load_kw", "consumption_ac_load_kw", "load_power_kw")
 
-        for site, key in zip(simulator.profiles, expected_keys):
+        for site, key, load_key in zip(simulator.profiles, expected_keys, load_keys):
             payload = simulator.generate_telemetry(site, timestamp)
             self.assertIn(key, payload)
             registers = payload.get("registers", payload.get(key))
@@ -64,6 +65,13 @@ class TelemetrySimulatorTests(unittest.TestCase):
                 "sungrow_data": "state_of_health",
             }[key]
             self.assertEqual(registers[health_key], site["initial_soh_pct"])
+            self.assertAlmostEqual(
+                registers["ev_charger_kw"] + registers["heat_pump_kw"] + registers["other_load_kw"],
+                registers[load_key],
+                delta=0.2,
+            )
+            self.assertEqual(registers["load_breakdown_source"], "modeled")
+            self.assertEqual(registers["power_flow_source"], "modeled")
 
 
 if __name__ == "__main__":

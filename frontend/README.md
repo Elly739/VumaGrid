@@ -1,6 +1,6 @@
 # VumaGrid Frontend
 
-The frontend is a Next.js operations dashboard for portfolio overview, site status, alerts, and recent site performance. The root [README](../README.md) contains the full product overview, API flow, security notes, simulation limitations, and end-to-end setup instructions.
+The frontend is a Next.js operations dashboard for portfolio overview, energy-network flow, site status, alerts, and site performance. The root [README](../README.md) contains the full product overview, API flow, security notes, simulation limitations, and end-to-end setup instructions.
 
 ## Run locally
 
@@ -15,7 +15,7 @@ Set `NEXT_PUBLIC_VUMAGRID_API_URL` in `.env.local` when the API is hosted at a d
 
 ## Source layout
 
-- `src/app/page.tsx`: operator workspaces, polling, filters, and chart rendering.
+- `src/app/page.tsx`: operator workspaces, polling, filters, network-flow diagram, and charts.
 - `src/app/globals.css`: dashboard layout, visual tokens, and responsive rules.
 - `src/app/layout.tsx`: root document and product metadata.
 - `src/lib/api.ts`: API origin, request errors, and session-scoped bearer token handling.
